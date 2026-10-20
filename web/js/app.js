@@ -326,7 +326,6 @@
               + (m.has_mmproj ? '' : ' disabled') + '><span></span></label>'
             : '')
         + '</div>'
-        + '<div class="size-bar"><i style="width:' + (m.size / maxSize * 100).toFixed(1) + '%"></i></div>'
         + '<div class="mfoot"><button class="btn mini ghost" data-act="select" data-mid="' + esc(m.id) + '">设为当前</button>'
         + '<span class="grow"></span>'
         + '<button class="btn mini primary" data-act="swap" data-mid="' + esc(m.id) + '">载入此模型</button>'

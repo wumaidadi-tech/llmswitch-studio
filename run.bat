@@ -30,6 +30,18 @@ call :probe "%ProgramFiles%\Python312\python.exe"
 call :probe "E:/ComfyUI-aki-v3.2/python/python.exe"
 call :probe "python"
 
+REM A second pass: prefer an interpreter that has pywebview installed.
+REM pywebview (WebView2) is what removes the black title bar; without it
+REM the app still runs, but falls back to Edge --app (29px Chromium bar).
+if defined PY (
+  %PY% -c "import webview" >nul 2>&1 && set "PYWV=1"
+)
+
+if not defined PYWV (
+  for /f "delims=" %%P in ('where python 2^>nul') do call :probe_wv "%%P"
+)
+if not defined PYWV call :probe_wv "D:/dev/python/python.exe"
+
 if not defined PY (
   echo [ERROR] No usable Python 3.8+ found.
   echo.
@@ -57,6 +69,15 @@ if /i "%~1"=="--check" (
 REM No third-party packages needed: backend is stdlib only,
 REM the UI runs in Edge (Chromium) via --app mode.
 start "" %PY% "%~dp0app.py" %*
+exit /b 0
+
+:probe_wv
+REM arg 1 = full path to a python.exe. Use it only if pywebview imports.
+if defined PY exit /b 0
+%~1 -c "import webview" >nul 2>&1
+if errorlevel 1 exit /b 0
+set "PY=%~1"
+set "PYWV=1"
 exit /b 0
 
 :probe_file

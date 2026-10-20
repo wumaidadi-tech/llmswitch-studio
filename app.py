@@ -95,7 +95,28 @@ user32.PostMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p,
 user32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
 user32.IsZoomed.argtypes = [ctypes.c_void_p]
 user32.ReleaseCapture.argtypes = []
+
+# 拖动用：GetAsyncKeyState(VK_LBUTTON) 判断左键是否还按着
+user32.GetCursorPos.argtypes = [ctypes.POINTER(wt.POINT)]
+user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+user32.GetAsyncKeyState.restype = ctypes.c_short
+user32.SetForegroundWindow.argtypes = [ctypes.c_void_p]
+user32.BringWindowToTop.argtypes = [ctypes.c_void_p]
+user32.IsIconic.argtypes = [ctypes.c_void_p]
+user32.ShowWindow.restype = ctypes.c_bool
+
+VK_LBUTTON = 0x01
+
+# 窗口类名：Edge --app 是 Chrome_WidgetWin_*，pywebview(WebView2) 是 WindowsForms10.Window.*
+EDGE_CLASS_HINT = "Chrome_WidgetWin"
+WV_CLASS_HINT = "WindowsForms10.Window"
+
+# 逻辑像素尺寸（pywebview 按 DPI 缩放；Edge --window-size 同样按 DPI）
+MINI_W, MINI_H = 320, 196
+MAIN_W, MAIN_H = 1240, 840
+
 WINDOW_URL = [""]
+WEBVIEW = {"lib": None, "win": {}}     # pywebview 后端（有就用，没有退回 Edge）
 FRAMELESS = True          # --framed 或 LLMSWITCH_FRAMED=1 可关掉无边框
 
 EDGE_CANDIDATES = [
@@ -133,6 +154,11 @@ def port_free(port):
 
 
 # ==================== 窗口 ====================
+def _MATCH_CLASS(cls):
+    """窗口类名白名单：Edge --app 与 pywebview(WebView2) 两种宿主都认。"""
+    return (EDGE_CLASS_HINT in cls) or (WV_CLASS_HINT in cls)
+
+
 def find_window(title):
     """按 标题 + 窗口类 + 面积 找窗口。
 
@@ -148,7 +174,7 @@ def find_window(title):
             if user32.IsWindowVisible(h):
                 cls = ctypes.create_unicode_buffer(128)
                 user32.GetClassNameW(h, cls, 128)
-                if "Chrome_WidgetWin" in cls.value:
+                if _MATCH_CLASS(cls.value):
                     n = user32.GetWindowTextLengthW(h)
                     if n:
                         buf = ctypes.create_unicode_buffer(n + 1)
@@ -227,20 +253,82 @@ def prepare_window(title, topmost=False, w=None, h=None, timeout=20):
 
 
 def window_action(action, mini=False, topmost=False, w=None, h=None):
-    """给 UI 用的窗口控制：open / drag / minimize / maximize / close / expand"""
+    """给 UI 用的窗口控制：open / drag / minimize / maximize / close / expand
+
+    action 别名要兼容前端按钮：min / max / min / maxi / minify。
+    """
+    action = {"min": "minimize", "max": "maximize", "maxi": "maximize",
+              "minimize": "minimize", "maximize": "maximize",
+              "close": "close", "expand": "expand", "open": "open",
+              "drag": "drag"}.get(action, action)
     title = paths.MINI_TITLE if mini else paths.APP_TITLE
+    # pywebview 分支优先：窗口已存在就直接 show，不再新开一个
+    win = WEBVIEW["win"].get(title)
+    if win is not None:
+        try:
+            if action == "open":
+                win.show()
+                if topmost:
+                    win.on_top = True
+                return True
+            if action == "drag":
+                hwnd = find_window(title)
+                if not hwnd:
+                    return False
+                return drag_window(hwnd)
+            if action == "minimize":
+                win.minimize()
+                return True
+            if action == "maximize":
+                if getattr(win, "maximized", False):
+                    win.restore()
+                else:
+                    win.maximize()
+                return True
+            if action == "close":
+                win.destroy()
+                WEBVIEW["win"].pop(title, None)
+                return True
+            if action == "expand":
+                other = WEBVIEW["win"].get(paths.APP_TITLE)
+                if other is not None and other is not win:
+                    # 主窗口已在：关掉悬浮窗，把主窗口带到前台（不是"另开一个页面"）
+                    try:
+                        other.show()
+                        other.restore()
+                    except Exception:
+                        pass
+                    h = find_window(paths.APP_TITLE)
+                    if h:
+                        user32.ShowWindow(ctypes.c_void_p(h), SW_RESTORE)
+                        user32.SetForegroundWindow(ctypes.c_void_p(h))
+                        user32.BringWindowToTop(ctypes.c_void_p(h))
+                    win.destroy()
+                    WEBVIEW["win"].pop(title, None)
+                    return "focus-main"
+                win.resize(MAIN_W, MAIN_H)
+                win.show()
+                return "expanded"
+        except Exception as exc:                       # noqa: BLE001
+            config.log("webview action %s FAILED %r" % (action, exc))
+            return False
+
     if action == "open":
-        return bool(open_window(WINDOW_URL[0] + ("&mini=1" if mini else ""), mini, topmost, w or 1280, h or 880))
+        if webview_lib():
+            dw = MINI_W if mini else MAIN_W
+            dh = MINI_H if mini else MAIN_H
+            return bool(webview_window(title, WINDOW_URL[0] + ("&mini=1" if mini else ""),
+                                       w or dw, h or dh,
+                                       mini=mini, topmost=topmost))
+        return bool(open_window(WINDOW_URL[0] + ("&mini=1" if mini else ""), mini, topmost,
+                                w or (MINI_W if mini else MAIN_W),
+                                h or (MINI_H if mini else MAIN_H)))
+
     hwnd = find_window(title)
     if not hwnd:
         return False
     if action == "drag":
-        try:
-            user32.ReleaseCapture()
-            user32.SendMessageW(ctypes.c_void_p(hwnd), WM_NCLBUTTONDOWN, ctypes.c_void_p(HTCAPTION), None)
-        except Exception:
-            return False
-        return True
+        return drag_window(hwnd)
     if action == "minimize":
         user32.ShowWindow(ctypes.c_void_p(hwnd), SW_SHOWMINIMIZED)
         return True
@@ -259,7 +347,7 @@ def window_action(action, mini=False, topmost=False, w=None, h=None):
         if other and other != hwnd:
             user32.PostMessageW(ctypes.c_void_p(hwnd), WM_CLOSE, None, None)
             return "focus-main"
-        resize_window(hwnd, w or 1280, h or 880)
+        resize_window(hwnd, w or MAIN_W, h or MAIN_H)
         make_frameless(hwnd)
         return "expanded"
     return False
@@ -277,11 +365,86 @@ def pin_window(title, timeout=25):
     return False
 
 
+def webview_lib():
+    """有 pywebview + WebView2 时优先用它：窗口真正无边框、可置顶。
+
+    Edge 的 --app 窗口会在页面区域里自己画一条 29px 标题栏（client 268 → innerHeight 239，
+    已实测），WS_CAPTION 去掉也没用 —— 只有换宿主才能彻底去掉黑条。
+    """
+    if WEBVIEW["lib"] is None:
+        try:
+            import webview as _wv
+            WEBVIEW["lib"] = _wv
+        except Exception as exc:                       # noqa: BLE001
+            WEBVIEW["lib"] = False
+            config.log("pywebview unavailable -> edge fallback: %r" % (exc,))
+    return WEBVIEW["lib"]
+
+
+def webview_window(title, url, w, h, mini=False, topmost=False, show=True):
+    wv = webview_lib()
+    if not wv:
+        return None
+    try:
+        win = wv.create_window(
+            title, url,
+            width=int(w), height=int(h),
+            frameless=bool(FRAMELESS), easy_drag=False,
+            on_top=bool(topmost), background_color="#070910",
+            hidden=not show,
+            min_size=(260, 150) if mini else (760, 560),
+        )
+        WEBVIEW["win"][title] = win
+        return win
+    except Exception as exc:                           # noqa: BLE001
+        config.log("create_window FAILED %r" % (exc,))
+        return None
+
+
+def drag_window(hwnd):
+    """无边框窗口的拖动：按住左键期间跟随光标移动窗口。
+
+    WM_NCLBUTTONDOWN/HTCAPTION 对 frameless 的 WinForms/Chromium 窗口都不生效，
+    所以自己轮询光标位置来移动。
+    """
+    def run():
+        r = wt.RECT()
+        user32.GetWindowRect(ctypes.c_void_p(hwnd), ctypes.byref(r))
+        p0 = wt.POINT()
+        user32.GetCursorPos(ctypes.byref(p0))
+        ox, oy = p0.x - r.left, p0.y - r.top
+        user32.SetForegroundWindow(ctypes.c_void_p(hwnd))
+        moved = False
+        while True:
+            st = user32.GetAsyncKeyState(VK_LBUTTON)
+            if not (st & 0x8000):
+                break
+            p = wt.POINT()
+            user32.GetCursorPos(ctypes.byref(p))
+            nx, ny = p.x - ox, p.y - oy
+            if not moved and (nx, ny) == (r.left, r.top):
+                time.sleep(0.01)
+                continue
+            moved = True
+            user32.SetWindowPos(ctypes.c_void_p(hwnd), None, int(nx), int(ny), 0, 0,
+                                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
+            time.sleep(0.015)
+        if moved:
+            user32.BringWindowToTop(ctypes.c_void_p(hwnd))
+    threading.Thread(target=run, daemon=True).start()
+    return True
+
+
 def open_window(url, mini=False, topmost=False, w=1280, h=880, pos=None):
     exe = find_edge()
     if not exe:
         return None
-    sw, sh = (w, h) if not mini else (400, 276)
+    sw, sh = (w, h) if not mini else (MINI_W, MINI_H)
+    if webview_lib():
+        win = webview_window(paths.MINI_TITLE if mini else paths.APP_TITLE,
+                             url, sw, sh, mini=mini, topmost=topmost)
+        if win:
+            return "webview"
     pos = pos or (None, None)
     args = [exe,
             "--app=" + url,
@@ -409,18 +572,34 @@ def main():
     config.log("http listening on %s:%d" % (paths.HOST, args.port))
 
     url = base_url + ("&mini=1" if args.mini else "")
+    use_wv = False
     if not args.serve:
-        if args.browser or not find_edge():
+        if not args.browser and webview_lib():
+            use_wv = True
+            if args.mini:
+                webview_window(paths.MINI_TITLE, url, MINI_W, MINI_H, mini=True, topmost=True)
+            else:
+                webview_window(paths.APP_TITLE, base_url,
+                               win.get("w") or MAIN_W, win.get("h") or MAIN_H)
+                # 悬浮窗先建好再藏着：点"打开悬浮窗"直接 show，避免二次开窗口卡顿
+                webview_window(paths.MINI_TITLE, base_url + "&mini=1", MINI_W, MINI_H,
+                               mini=True, topmost=True, show=False)
+            config.log("ui backend: pywebview (frameless=%s)" % FRAMELESS)
+        elif args.browser or not find_edge():
             os.startfile(url)                          # noqa: S606
         else:
             open_window(url, args.mini, args.topmost,
-                        win.get("w") or 1280, win.get("h") or 880,
+                        win.get("w") or MAIN_W, win.get("h") or MAIN_H,
                         (win.get("x"), win.get("y")))
             threading.Thread(target=watch_windows, args=(stop_evt,), daemon=True).start()
 
     try:
-        while not stop_evt.is_set():
-            time.sleep(0.5)
+        if use_wv:
+            WEBVIEW["lib"].start()                     # 阻塞到所有窗口关闭
+            stop_evt.set()
+        else:
+            while not stop_evt.is_set():
+                time.sleep(0.5)
     except KeyboardInterrupt:
         pass
     finally:
