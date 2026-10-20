@@ -78,6 +78,26 @@ user32.SetWindowPos.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, 
                                 ctypes.c_int, ctypes.c_int, ctypes.c_uint]
 
 GW_HWNDNEXT = 2
+
+GWL_STYLE = -16
+WS_CAPTION = 0x00C00000
+SWP_NOSIZE, SWP_NOMOVE, SWP_NOZORDER, SWP_NOACTIVATE, SWP_FRAMECHANGED = 0x1, 0x2, 0x4, 0x10, 0x20
+SW_SHOWMINIMIZED, SW_MAXIMIZE, SW_RESTORE = 6, 3, 9
+WM_CLOSE, WM_NCLBUTTONDOWN, HTCAPTION = 0x0010, 0x00A1, 2
+
+user32.GetWindowLongW.restype = ctypes.c_long
+user32.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+user32.SetWindowLongW.restype = ctypes.c_long
+user32.SetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]
+user32.SendMessageW.restype = ctypes.c_long
+user32.SendMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p]
+user32.PostMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p]
+user32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
+user32.IsZoomed.argtypes = [ctypes.c_void_p]
+user32.ReleaseCapture.argtypes = []
+WINDOW_URL = [""]
+FRAMELESS = True          # --framed 或 LLMSWITCH_FRAMED=1 可关掉无边框
+
 EDGE_CANDIDATES = [
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
     r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
@@ -133,7 +153,8 @@ def find_window(title):
                     if n:
                         buf = ctypes.create_unicode_buffer(n + 1)
                         user32.GetWindowTextW(h, buf, n + 1)
-                        if buf.value.strip() == title:
+                        # 用前缀匹配：悬浮窗的标题会变成 "LLMSwitch Mini · 运行中"
+                        if buf.value.strip().startswith(title):
                             r = wt.RECT()
                             user32.GetWindowRect(h, ctypes.byref(r))
                             area = (r.right - r.left) * (r.bottom - r.top)
@@ -157,6 +178,93 @@ def set_topmost(hwnd, on=True):
         return False
 
 
+def make_frameless(hwnd):
+    """去掉系统标题栏，只留网页内容（窗口仍可从边缘缩放）。"""
+    if not FRAMELESS:
+        return False
+    try:
+        style = user32.GetWindowLongW(ctypes.c_void_p(hwnd), GWL_STYLE)
+        if style & WS_CAPTION:
+            user32.SetWindowLongW(ctypes.c_void_p(hwnd), GWL_STYLE, style & ~WS_CAPTION)
+            user32.SetWindowPos(ctypes.c_void_p(hwnd), None, 0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
+        return True
+    except Exception as exc:                          # noqa: BLE001
+        config.log("make_frameless FAILED %r" % (exc,))
+        return False
+
+
+def resize_window(hwnd, w, h, x=None, y=None):
+    flags = SWP_NOZORDER | SWP_NOACTIVATE | (SWP_NOMOVE if x is None else 0)
+    user32.SetWindowPos(ctypes.c_void_p(hwnd), None, x or 0, y or 0, int(w), int(h), flags)
+
+
+def prepare_window(title, topmost=False, w=None, h=None, timeout=20):
+    """窗口出现后统一处理：去标题栏 → 设尺寸 → 置顶。
+
+    Edge 有时会把样式改回去，所以多试两次。
+    """
+    end = time.time() + timeout
+    hwnd = None
+    while time.time() < end:
+        hwnd = find_window(title)
+        if hwnd:
+            break
+        time.sleep(0.4)
+    if not hwnd:
+        return None
+    if w and h:
+        resize_window(hwnd, w, h)
+    for _ in range(3):
+        make_frameless(hwnd)
+        time.sleep(0.35)
+    if topmost:
+        set_topmost(hwnd, True)
+    elif title == paths.APP_TITLE:
+        # 主窗口绝不置顶：只有悬浮窗需要钉在最前面
+        set_topmost(hwnd, False)
+    return hwnd
+
+
+def window_action(action, mini=False, topmost=False, w=None, h=None):
+    """给 UI 用的窗口控制：open / drag / minimize / maximize / close / expand"""
+    title = paths.MINI_TITLE if mini else paths.APP_TITLE
+    if action == "open":
+        return bool(open_window(WINDOW_URL[0] + ("&mini=1" if mini else ""), mini, topmost, w or 1280, h or 880))
+    hwnd = find_window(title)
+    if not hwnd:
+        return False
+    if action == "drag":
+        try:
+            user32.ReleaseCapture()
+            user32.SendMessageW(ctypes.c_void_p(hwnd), WM_NCLBUTTONDOWN, ctypes.c_void_p(HTCAPTION), None)
+        except Exception:
+            return False
+        return True
+    if action == "minimize":
+        user32.ShowWindow(ctypes.c_void_p(hwnd), SW_SHOWMINIMIZED)
+        return True
+    if action == "maximize":
+        if user32.IsZoomed(ctypes.c_void_p(hwnd)):
+            user32.ShowWindow(ctypes.c_void_p(hwnd), SW_RESTORE)
+        else:
+            user32.ShowWindow(ctypes.c_void_p(hwnd), SW_MAXIMIZE)
+        return True
+    if action == "close":
+        user32.PostMessageW(ctypes.c_void_p(hwnd), WM_CLOSE, None, None)
+        return True
+    if action == "expand":
+        # 悬浮窗原地变大 + 由页面跳到主界面（不另开窗口）
+        other = find_window(paths.APP_TITLE)
+        if other and other != hwnd:
+            user32.PostMessageW(ctypes.c_void_p(hwnd), WM_CLOSE, None, None)
+            return "focus-main"
+        resize_window(hwnd, w or 1280, h or 880)
+        make_frameless(hwnd)
+        return "expanded"
+    return False
+
+
 def pin_window(title, timeout=25):
     """等某个窗口出现后钉在最上层（新开的悬浮窗用）。"""
     end = time.time() + timeout
@@ -173,7 +281,7 @@ def open_window(url, mini=False, topmost=False, w=1280, h=880, pos=None):
     exe = find_edge()
     if not exe:
         return None
-    sw, sh = (w, h) if not mini else (400, 220)
+    sw, sh = (w, h) if not mini else (400, 236)
     pos = pos or (None, None)
     args = [exe,
             "--app=" + url,
@@ -191,10 +299,9 @@ def open_window(url, mini=False, topmost=False, w=1280, h=880, pos=None):
     except Exception as exc:                          # noqa: BLE001
         config.log("open_window FAILED %r" % (exc,))
         return None
-    if topmost:
-        threading.Thread(target=pin_window,
-                         args=(paths.MINI_TITLE if mini else paths.APP_TITLE,),
-                         daemon=True).start()
+    threading.Thread(target=prepare_window,
+                     args=(paths.MINI_TITLE if mini else paths.APP_TITLE, topmost, sw, sh),
+                     daemon=True).start()
     return "edge"
 
 
@@ -251,8 +358,12 @@ def main():
     ap.add_argument("--mini", action="store_true", help="只开紧凑悬浮窗")
     ap.add_argument("--topmost", action="store_true", help="窗口置顶")
     ap.add_argument("--console", action="store_true", help="保留控制台（调试）")
+    ap.add_argument("--framed", action="store_true", help="保留系统标题栏（无边框出问题时用）")
     args = ap.parse_args()
 
+    global FRAMELESS
+    if args.framed or os.environ.get("LLMSWITCH_FRAMED") == "1":
+        FRAMELESS = False
     paths.ensure_dirs()
     if not args.console and not paths.FROZEN:
         hide_console()
@@ -286,12 +397,13 @@ def main():
     stop_evt = threading.Event()
     httpd = api.make_server(args.port, token, mgr)
 
-    def _open(mini, topmost):
-        return open_window(base_url + ("&mini=1" if mini else ""), mini, topmost,
-                           win.get("w") or 1280, win.get("h") or 880,
-                           (win.get("x"), win.get("y")))
+    WINDOW_URL[0] = base_url
 
-    api.set_window_opener(_open)
+    def _win(action, mini, topmost, w, h):
+        return window_action(action, mini, topmost, w or win.get("w") or 1280,
+                             h or win.get("h") or 880)
+
+    api.set_window_opener(_win)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     threading.Thread(target=api.probe_loop, args=(mgr, stop_evt), daemon=True).start()
     config.log("http listening on %s:%d" % (paths.HOST, args.port))

@@ -122,6 +122,9 @@ def _model_public(entry):
         "size": entry["size"],
         "dir": entry["dir"],
         "has_mmproj": bool(entry.get("mmproj")),
+        "mmproj_name": entry.get("mmproj_name") or "",
+        "mmproj_size": entry.get("mmproj_size") or 0,
+        "quant_mix": entry.get("quant_mix") or [],
         "has_mtp_file": bool(entry.get("mtp")),
         "has_nextn": bool(entry.get("has_nextn")),
         "arch": arch,
@@ -340,10 +343,15 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/window":
                 if _window_opener is None:
                     return self._json({"ok": False, "error": "no window support"}, 400)
+                action = body.get("action") or "open"
                 mini = bool(body.get("mini"))
                 top = bool(body.get("topmost"))
-                r = _window_opener(mini, top)
-                return self._json({"ok": bool(r), "mini": mini, "topmost": top})
+                w = body.get("w")
+                h = body.get("h")
+                r = _window_opener(action, mini, top, w, h)
+                return self._json({"ok": bool(r), "action": action,
+                                   "result": r if isinstance(r, str) else None,
+                                   "mini": mini, "topmost": top})
 
             if p == "/api/settings":
                 ld = str(body.get("llama_dir") or "").strip()

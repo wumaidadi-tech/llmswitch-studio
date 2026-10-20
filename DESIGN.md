@@ -264,3 +264,23 @@ Electron 是几十 MB 的额外运行时。`--app` 方案一个 `Popen` 就够�
 - 显存估算用固定系数（每 1K token：f16≈30MiB、q8_0≈15MiB）加上固定开销，
   不同模型层数会有偏差，只作预警。
 - 界面文案仍是中文（README 双语），i18n 未做。
+
+### 6.6 v2.2 修复（来自实测反馈）
+
+| 反馈 | 根因 | 处理 |
+|---|---|---|
+| 下拉框收不回去 | 弹层 append 到 `body`，`closeSel()` 用 `openSel.querySelector` 找不到它 | 记住 `sel._pop` 引用再移除；同时修掉 `onDocDown` 里先置空再取值的空引用 |
+| 选项点了没反应 | 弹层在 `#content` 之外，委托的 click 收不到 | 选项点击改挂到 `document` |
+| 上下文长度不能键盘输入 | 枚举只有按钮，没有输入框 | 改成组合框：输入框 + 箭头，打字「64」回车即 64K，↑↓ 选择、Esc 还原 |
+| 加减按钮没反应 | `stepBtn.closest('[data-ns]')` 返回 null（`data-ns` 在 input 上） | 从 `.step` 里取 input，再读 ns/k |
+| 参数说明不明确 | hint 写的是结论不是用法 | 全部重写：这一项影响什么、调大调小怎样、常用值 |
+| 保存预设弹窗太空 | 同一个弹窗模板，宽 820px 但只有一个输入框 | `askName` 加 `.compact`（440px），标题/输入/按钮紧凑排列 |
+| 主窗口也置顶了 | 窗口标题被 JS 改成「LLMSwitch Mini · 运行中」，精确匹配失败，加上主/副窗口判断混乱 | 标题匹配改**前缀匹配**；主窗口显式 `set_topmost(False)`，只有悬浮窗置顶 |
+| 点「展开」又开一个窗口 | 展开实现是 `openFloat()` | 改 `action:"expand"`：原地 SetWindowPos 放大 + 页面 `location.replace` 到主界面；若已有主窗口则关闭悬浮窗 |
+| 悬浮窗一打开就很大 | Edge 按 profile 恢复上次窗口尺寸，忽略 `--window-size` | 窗口出现后用 `SetWindowPos` 强制尺寸；顶栏黑框用 `SetWindowLong` 去掉 `WS_CAPTION`（`--framed` 可回退） |
+| 量化显示 Q6_K 不对 | 只读了 `general.file_type`（"MOSTLY_Q6_K"） | 改为按张量 offset 差值累计**每种类型的字节数**：Quality 实际是 Q6_K 39.1% + IQ4_XS 36.4% + Q5_K 23.5%，无单一类型 ≥60% 时显示「混合」 |
+| 模型名是猜的 | 早期用规则拼短名 | 直接用文件名，超长时做**中间省略**（保留结尾的 Quality / Q4_K_M） |
+| 看不到视觉模型 | mmproj 只在标签里出现一个 Vision | 模型卡新增「视觉」行：文件名 + 体积 + 开关（写回 `launch.mmproj`，重启生效） |
+
+另外：临时 UI 测试脚本（CDP 抓页 + 起浏览器）被安全软件判定为可疑文件，已删除；
+这类脚本只在开发时用完即弃，不进仓库。

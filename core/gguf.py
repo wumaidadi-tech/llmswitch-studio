@@ -32,6 +32,16 @@ _FTYPE = {
     29: "IQ2_M", 30: "IQ4_XS", 31: "IQ1_M", 32: "BF16",
 }
 
+# GGML 张量类型（llama.cpp ggml_type 枚举里常用的部分）
+TTYPES = {
+    0: "F32", 1: "F16", 2: "Q4_0", 3: "Q4_1", 6: "Q5_0", 7: "Q5_1", 8: "Q8_0",
+    9: "Q8_1", 10: "Q2_K", 11: "Q3_K", 12: "Q4_K", 13: "Q5_K", 14: "Q6_K",
+    15: "Q8_K", 16: "IQ2_XXS", 17: "IQ2_XS", 18: "IQ3_XXS", 19: "IQ1_S",
+    20: "IQ4_NL", 21: "IQ3_S", 22: "IQ2_S", 23: "IQ4_XS", 24: "I8", 25: "I16",
+    26: "I32", 27: "I64", 28: "F64", 29: "IQ1_M", 30: "BF16", 34: "TQ1_0",
+    35: "TQ2_0", 39: "MXFP4",
+}
+
 # 元数据里值得取出来的键（其余一律 seek 跳过，不读内容）
 _KEEP = {
     "general.architecture": "arch",
@@ -144,14 +154,35 @@ def read_meta(path, max_kv=200000):
                     out[alias] = val
                 if key == "general.architecture" and isinstance(val, str):
                     arch = val
-            # 张量表：只为了找 nextn / 统计张量数
+            # 张量表：找 nextn；同时按 offset 差值算出每种类型的真实字节数
             has_nextn = False
+            tensors = []
             for _ in range(tcnt):
-                nm = r.string().lower()
-                if "nextn" in nm:
+                nm = r.string()
+                low = nm.lower()
+                if "nextn" in low:
                     has_nextn = True
                 nd = r.u32()
-                f.seek(8 * nd + 4 + 8, 1)
+                f.seek(8 * nd, 1)
+                ty = r.u32()
+                off = r.u64()
+                tensors.append((ty, off))
+            tensors.sort(key=lambda x: x[1])
+            try:
+                file_size = os.path.getsize(path)
+            except OSError:
+                file_size = 0
+            by_type = {}
+            for i, (ty, off) in enumerate(tensors):
+                end = tensors[i + 1][1] if i + 1 < len(tensors) else file_size
+                if end > off:
+                    by_type[ty] = by_type.get(ty, 0) + (end - off)
+            total = sum(by_type.values()) or 1
+            mix = sorted(({"type": TTYPES.get(t, "T%d" % t), "bytes": b,
+                           "pct": round(100.0 * b / total, 1)}
+                          for t, b in by_type.items()),
+                         key=lambda x: -x["bytes"])
+            out["quant_mix"] = mix[:4]
         out.setdefault("arch", arch or "")
         out["has_nextn"] = has_nextn
         out["gguf_version"] = ver
@@ -196,7 +227,18 @@ def _stem(path):
     return base[:-5] if base.lower().endswith(".gguf") else base
 
 
-def quant_of(name, file_type=None):
+def quant_of(name, file_type=None, mix=None):
+    """量化标识。
+
+    优先看**张量字节占比**：现在的量化多为混合（例如 Q6_K 39% + IQ4_XS 36% + Q5_K 24%），
+    GGUF 的 general.file_type 只是 "MOSTLY_xxx" 的粗略标记，单看它会骗人。
+    没有任何一种类型占比 ≥ 60% 时返回 "混合"。
+    """
+    if mix:
+        top = mix[0]
+        if top["pct"] >= 60:
+            return top["type"]
+        return "混合"
     m = _QUANT_RE.search(_stem(name))
     if m:
         return m.group(1).upper().replace("-", "_")
@@ -204,7 +246,15 @@ def quant_of(name, file_type=None):
 
 
 def model_label(path):
-    """长文件名 → 短名（Qwen3.6·APEX·Quality / Qwen3.6·UD·Q4_K_M）"""
+    """模型显示名：直接用文件名（去掉 .gguf）。
+
+    之前会拼成 "Qwen3.6·APEX·Quality" 这种缩写，猜错时反而误导，
+    现在是什么文件就显示什么。
+    """
+    return _stem(path)
+
+
+def _old_model_label(path):
     name = _stem(path)
     low = name.lower()
     if "huihui" in low:
@@ -284,12 +334,15 @@ def scan_models():
         out.append({
             "id": rel,
             "label": model_label(full),
+            "quant_mix": meta.get("quant_mix") or [],
+            "mmproj_name": os.path.basename(mmproj) if mmproj else "",
+            "mmproj_size": (os.path.getsize(mmproj) if mmproj else 0),
             "model": full,
             "file": fn,
             "mmproj": mmproj,
             "mtp": draft,
             "spec": size_tag(fn),
-            "quant": quant_of(fn, meta.get("file_type")),
+            "quant": quant_of(fn, meta.get("file_type"), meta.get("quant_mix")),
             "size": size,
             "mtime": int(mtime),
             "dir": os.path.basename(d),

@@ -138,14 +138,19 @@
 
   function renderTop() {
     const c = S.current;
-    $('#tbModel').textContent = c ? c.label
+    $('#tbModel').textContent = c ? midName(c.label, 34)
       : ((S.setup && S.setup.needs_llama_dir) ? '未配置模型目录' : '没有检测到模型');
+    $('#tbModel').title = c ? c.label : '';
     const tags = [];
     if (c) {
       if (c.spec) tags.push('<span class="tag">' + esc(c.spec) + '</span>');
-      if (c.quant) tags.push('<span class="tag acc">' + esc(c.quant) + '</span>');
+      if (c.quant) {
+        const mix = (c.quant_mix || []).map((x) => x.type + ' ' + x.pct + '%').join(' · ');
+        tags.push('<span class="tag acc" title="' + esc(mix || '') + '">' + esc(c.quant) + '</span>');
+      }
+      if (c.has_mmproj) tags.push('<span class="tag" title="' + esc(c.mmproj_name || '') + '">视觉</span>');
       if (c.has_nextn) tags.push('<span class="tag run">MTP</span>');
-      if (c.has_mmproj) tags.push('<span class="tag">Vision</span>');
+
       if (c.n_layers) tags.push('<span class="tag">' + c.n_layers + ' L</span>');
       if (c.n_expert) tags.push('<span class="tag">' + c.n_expert + ' E</span>');
     }
@@ -163,6 +168,26 @@
     fp.textContent = S.paths.llama_port || S.paths.port;
     fp.title = 'llama-server: ' + (S.paths.llama_port || '') + ' · 控制台: ' + S.paths.port;
     $('#modelCount').textContent = S.models.length;
+    if (MINI) {
+      $('#miniModel').hidden = false;
+      $('#miniModelName').textContent = c ? midName(c.label, 28) : '没有模型';
+      $('#miniModel').title = (c ? c.label : '') + (S.status.pid ? ' · PID ' + S.status.pid : '');
+      const mm = $('#miniMeta');
+      const capK = Math.round((S.live.ctx_cap || 0) / 1024);
+      const usedK = Math.round((S.live.ctx_used || 0) / 1024);
+      const lc = S.cfg.launch || {};
+      const cfgLine = (lc.ctx === 'auto' ? (S.status.ctx || '自动') : (lc.ctx + 'K'))
+        + ' · ' + (S.status.kv || lc.kv || '—')
+        + (lc.spec === 'draft-mtp' ? ' · MTP' : '')
+        + (lc.mmproj && c && c.has_mmproj ? ' · 视觉' : '');
+      if (mm) {
+        mm.innerHTML = '<span title="显存占用">显存 <b>' + (S.live.gpu.total
+            ? ((S.live.gpu.used / 1024).toFixed(1) + ' / ' + (S.live.gpu.total / 1024).toFixed(1))
+            : '—') + '</b>G</span>'
+          + '<span title="启动配置">' + esc(cfgLine) + '</span>'
+          + '<span title="上下文剩余">余 <b>' + (capK ? Math.max(0, capK - usedK) + 'K' : '—') + '</b></span>';
+      }
+    }
     $('#verTag').textContent = 'v' + S.version;
   }
 
@@ -173,9 +198,11 @@
       if (m.selected) cls.push('on');
       if (m.running) cls.push('run');
       return '<div class="' + cls.join(' ') + '" data-mid="' + esc(m.id) + '" title="' + esc(m.id) + '">'
-        + '<div class="mt"><i></i>' + esc(m.label) + '</div>'
-        + '<div class="ms"><b>' + esc(m.quant || '—') + '</b><span>·</span><span>' + fmtGB(m.size) + '</span>'
-        + (m.has_nextn ? '<span>·</span><span>MTP</span>' : '') + '</div></div>';
+        + '<div class="mt"><i></i>' + esc(midName(m.label, 22)) + '</div>'
+        + '<div class="ms"><b title="' + esc(mixText(m)) + '">' + esc(m.quant || '—') + '</b><span>·</span><span>'
+        + fmtGB(m.size) + '</span>'
+        + (m.has_nextn ? '<span>·</span><span>MTP</span>' : '')
+        + (m.has_mmproj ? '<span>·</span><span>视觉</span>' : '') + '</div></div>';
     }).join('');
     if (box.dataset.sig !== html) { box.innerHTML = html; box.dataset.sig = html; }
   }
@@ -232,6 +259,22 @@
   }
 
   /* ---------------- 模型 ---------------- */
+  function mixText(m) {
+    return (m.quant_mix || []).map((x) => x.type + ' ' + x.pct + '%').join(' · ') || '—';
+  }
+
+  function midName(n, keepHead) {
+    if (!n) return '';
+    const head = keepHead || 26, tail = 18;
+    if (n.length <= head + tail + 1) return n;
+    return n.slice(0, head) + '…' + n.slice(-tail);
+  }
+
+  function shortName(n) {
+    if (!n) return '';
+    return n.length > 34 ? n.slice(0, 15) + '…' + n.slice(-14) : n;
+  }
+
   function renderModelGrid() {
     const box = $('#modelGrid');
     const dir = $('#modelsDir');
@@ -249,7 +292,7 @@
         m.running ? '<span class="tag run">已载入</span>' : '',
       ].join('');
       return '<div class="card hover mcard ' + (m.selected ? 'on' : '') + '" data-mid="' + esc(m.id) + '">'
-        + '<div class="mh"><div class="mh-t"><h3>' + esc(m.label) + '</h3>'
+        + '<div class="mh"><div class="mh-t"><h3 title="' + esc(m.label) + '">' + esc(midName(m.label, 34)) + '</h3>'
         + '<div class="sub">' + esc(m.dir) + ' · ' + esc(m.quant || '?') + '</div></div>'
         + '<div class="mh-b">' + badges + '</div></div>'
         + '<div class="meta">'
@@ -258,7 +301,21 @@
         + '<div><span>架构</span><b>' + esc(m.arch || '—') + '</b></div>'
         + '<div><span>层 / 专家</span><b>' + (m.n_layers || '?') + ' / ' + (m.n_expert || '?') + '</b></div>'
         + '<div><span>原生上下文</span><b>' + (m.n_ctx_train ? (m.n_ctx_train / 1024) + 'K' : '—') + '</b></div>'
-        + '<div><span>量化</span><b>' + esc(m.quant || '—') + '</b></div>'
+        + '<div title="' + esc(mixText(m)) + '"><span>量化</span><b>' + esc(m.quant || '—') + '</b></div>'
+        + '</div>'
+        + (m.quant_mix && m.quant_mix.length ? '<div class="mixbar" title="' + esc(mixText(m)) + '">'
+          + m.quant_mix.map((x) => '<span class="mixseg" style="flex:' + x.pct + '">' + esc(x.type) + ' ' + x.pct + '%</span>').join('')
+          + '</div>' : '')
+        + '<div class="vproj ' + (m.has_mmproj ? '' : 'off') + '">'
+        + '<span class="vp-t">视觉</span>'
+        + '<b title="' + esc(m.mmproj_name || '') + '">'
+        + (m.has_mmproj ? esc(shortName(m.mmproj_name)) + ' · ' + fmtGB(m.mmproj_size) : '没有 mmproj 文件')
+        + '</b>'
+        + (m.selected
+            ? '<label class="switch mini' + (m.has_mmproj ? '' : ' dis') + '" title="启动时是否挂载视觉投影">'
+              + '<input type="checkbox" data-mmp="1"' + (S.cfg.launch.mmproj && m.has_mmproj ? ' checked' : '')
+              + (m.has_mmproj ? '' : ' disabled') + '><span></span></label>'
+            : '')
         + '</div>'
         + '<div class="size-bar"><i style="width:' + (m.size / maxSize * 100).toFixed(1) + '%"></i></div>'
         + '<div class="mfoot"><button class="btn mini ghost" data-act="select" data-mid="' + esc(m.id) + '">设为当前</button>'
@@ -282,9 +339,12 @@
     let ctl = '';
 
     if (spec.kind === 'enum') {
-      ctl = '<div class="sel" ' + attrs + ' data-v="' + esc(val) + '" id="' + id + '">'
-        + '<button type="button" class="sel-btn"><span class="sel-val">' + esc(optLabel(spec, val))
-        + '</span><svg viewBox="0 0 12 12"><path d="M2 4l4 4 4-4"/></svg></button></div>';
+      // 组合框：既能点，也能直接打字（打 "64" 回车就是 64K）。原来的纯按钮不可输入。
+      ctl = '<div class="sel" ' + attrs + ' data-v="' + esc(val) + '">'
+        + '<input class="sel-input" id="' + id + '" type="text" autocomplete="off" spellcheck="false"'
+        + ' value="' + esc(optLabel(spec, val)) + '" aria-label="' + esc(spec.label) + '">'
+        + '<button type="button" class="sel-btn" tabindex="-1" aria-label="展开">'
+        + '<svg viewBox="0 0 12 12"><path d="M2 4l4 4 4-4"/></svg></button></div>';
     } else if (spec.kind === 'bool') {
       ctl = '<label class="switch"><input type="checkbox" ' + attrs + (val ? ' checked' : '')
         + '><span></span><i class="sw-txt">' + (val ? '开启' : '关闭') + '</i></label>';
@@ -363,9 +423,9 @@
       const v = draft[ns][k];
       if (el.classList.contains('sel')) {
         el.dataset.v = v;
-        const lab = el.querySelector('.sel-val');
+        const inp = el.querySelector('.sel-input');
         const spec = specOf(ns, k);
-        if (lab && spec) lab.textContent = optLabel(spec, v);
+        if (inp && spec && document.activeElement !== inp) inp.value = optLabel(spec, v);
       } else if (el.type === 'checkbox') {
         el.checked = !!v;
         const t = el.closest('.switch') && el.closest('.switch').querySelector('.sw-txt');
@@ -393,37 +453,96 @@
   /* ---------------- 自定义下拉 ---------------- */
   function closeSel() {
     if (!openSel) return;
+    const pop = openSel._pop;                 // 弹层挂在 body 上，必须记住引用
+    if (pop && pop.parentNode) pop.remove();
+    openSel._pop = null;
     openSel.classList.remove('open');
-    const pop = openSel.querySelector('.sel-pop');
-    if (pop && pop.parentNode === document.body) pop.remove();
     openSel = null;
+    document.removeEventListener('mousedown', onDocDown, true);
   }
 
-  function openSelect(sel) {
-    const spec = specOf(sel.dataset.ns, sel.dataset.k);
+  function onDocDown(ev) {
+    const sel = openSel;
+    if (!sel) return;
+    if (ev.target.closest('.sel-pop') || ev.target.closest('.sel')) return;
+    closeSel();
+    revertSelLabel(sel);
+  }
+
+  function selSpec(sel) { return specOf(sel.dataset.ns, sel.dataset.k); }
+
+  function selInput(sel) { return sel.querySelector('.sel-input'); }
+
+  function revertSelLabel(sel) {
+    const spec = selSpec(sel);
+    const inp = selInput(sel);
+    if (spec && inp) inp.value = optLabel(spec, sel.dataset.v);
+  }
+
+  function commitSel(sel, v) {
+    const spec = selSpec(sel);
+    if (!spec) return;
+    setValue(sel.dataset.ns, sel.dataset.k, v);
+    sel.dataset.v = String(v);
+    const inp = selInput(sel);
+    if (inp) inp.value = optLabel(spec, v);
+    closeSel();
+    if (sel.dataset.ns === 'launch') renderBudget();
+  }
+
+  function openSelect(sel, query) {
+    const spec = selSpec(sel);
     if (!spec) return;
     if (openSel === sel) { closeSel(); return; }
     closeSel();
-    const btn = sel.querySelector('.sel-btn');
     const pop = document.createElement('div');
     pop.className = 'sel-pop';
+    const q = (query || '').trim().toLowerCase();
+    let first = null;
     (spec.options || []).forEach(([v, label]) => {
+      const hit = !q || label.toLowerCase().includes(q) || String(v).toLowerCase() === q;
+      if (!hit) return;
       const o = document.createElement('div');
       o.className = 'sel-opt' + (String(v) === String(sel.dataset.v) ? ' on' : '');
       o.dataset.v = v;
       o.textContent = label;
       pop.appendChild(o);
+      if (!first) first = o;
     });
+    if (!pop.childElementCount) {
+      const o = document.createElement('div');
+      o.className = 'sel-opt';
+      o.textContent = '没有匹配项';
+      o.dataset.v = '';
+      pop.appendChild(o);
+    }
     document.body.appendChild(pop);
-    const r = btn.getBoundingClientRect();
-    pop.style.minWidth = Math.max(120, r.width) + 'px';
+    const r = sel.getBoundingClientRect();
+    pop.style.minWidth = Math.max(140, r.width) + 'px';
     const ph = pop.offsetHeight;
     const below = window.innerHeight - r.bottom;
     pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 8)) + 'px';
     pop.style.top = (below < ph + 12 ? Math.max(8, r.top - ph - 6) : r.bottom + 6) + 'px';
     sel.classList.add('open');
+    sel._pop = pop;
     openSel = sel;
+    if (first) setActiveOpt(pop, first);
+    document.addEventListener('mousedown', onDocDown, true);
   }
+
+  function setActiveOpt(pop, opt) {
+    Array.from(pop.children).forEach((c) => c.classList.toggle('act', c === opt));
+  }
+
+  function moveActiveOpt(pop, delta) {
+    const list = Array.from(pop.children).filter((c) => c.dataset.v !== '');
+    if (!list.length) return;
+    let i = list.findIndex((c) => c.classList.contains('act'));
+    i = i < 0 ? (delta > 0 ? 0 : list.length - 1) : (i + delta + list.length) % list.length;
+    setActiveOpt(pop, list[i]);
+  }
+
+  function activeOpt(pop) { return pop && pop.querySelector('.sel-opt.act'); }
 
   /* ---------------- 图表 ---------------- */
   function sizeCanvas(cv) {
@@ -702,6 +821,7 @@
 
   /* ---------------- 弹窗 ---------------- */
   function modal(title, text) {
+    $('.modal-card').classList.remove('compact');
     $('#modalTitle').textContent = title;
     $('#modalBody').textContent = text;
     $('#modalInput').hidden = true;
@@ -717,6 +837,7 @@
   function askName(title, placeholder, value) {
     return new Promise((resolve) => {
       const m = $('#modal');
+      $('.modal-card').classList.add('compact');
       $('#modalTitle').textContent = title;
       $('#modalBody').textContent = '';
       const inp = $('#modalInput');
@@ -776,6 +897,30 @@
       }
     });
 
+    const mmBtn = $('#miniModel');
+    if (mmBtn) mmBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openMiniModels(); });
+    document.addEventListener('click', (ev) => {
+      const o = ev.target.closest('#miniModel, .sel-pop');
+      if (!o) closeMiniPop();
+      const opt = ev.target.closest('[data-mid]');
+      if (opt && miniPop) {
+        closeMiniPop();
+        selectModel(opt.dataset.mid, true);
+      }
+    });
+
+    $$('.win-ctrls button').forEach((b) => {
+      b.addEventListener('click', () => winCtl(b.dataset.win));
+    });
+    // 拖动：优先交给 Chromium 的 app-region，不行就发 WM_NCLBUTTONDOWN
+    const dragBar = $('.topbar');
+    if (dragBar) {
+      dragBar.addEventListener('mousedown', (ev) => {
+        if (ev.button !== 0 || ev.target.closest('button, input, .win-ctrls, .pill')) return;
+        setTimeout(() => { if (!ev.defaultPrevented) winCtl('drag'); }, 0);
+      });
+    }
+
     $('#btnToggle').addEventListener('click', toggleRun);
     $('#btnRestart').addEventListener('click', () => serverAction('restart', S.current && S.current.id));
     $('#btnFloat').addEventListener('click', () => openFloat(true));
@@ -783,6 +928,12 @@
     $('#content').addEventListener('input', onInput);
     $('#content').addEventListener('change', onInput);
     $('#content').addEventListener('click', onClickControls);
+    $('#content').addEventListener('keydown', onSelKey);
+    $('#content').addEventListener('focusout', onSelBlur);
+    $('#content').addEventListener('focusin', (ev) => {
+      const inp = ev.target.closest && ev.target.closest('.sel-input');
+      if (inp) openSelect(inp.closest('.sel'));
+    });
     $('#btnSaveLaunch').addEventListener('click', () => save('launch', false));
     $('#btnApplyRestart').addEventListener('click', () => save('launch', true));
     $('#btnSaveSampling').addEventListener('click', () => save('sampling', false));
@@ -795,6 +946,23 @@
       renderBudget();
       markDirty();
       toast('按可用显存选了 ' + c + 'K / 自动 KV', 'ok');
+    });
+
+    $('#modelGrid').addEventListener('change', async (ev) => {
+      const cb = ev.target.closest('[data-mmp]');
+      if (!cb) return;
+      if (DEMO) { toast('演示模式', 'ok'); return; }
+      try {
+        const d = await api('/api/config', {
+          json: { id: S.current.id, cfg: { launch: { mmproj: cb.checked } } },
+        });
+        S.cfg = d.cfg;
+        toast(cb.checked ? '已开启视觉投影，重启后生效' : '已关闭视觉投影，重启后生效', 'ok');
+        render();
+      } catch (e) {
+        cb.checked = !cb.checked;
+        toast('保存失败：' + e.message, 'err');
+      }
     });
 
     const om = $('#btnOpenModels');
@@ -896,6 +1064,14 @@
       menu.hidden = !willOpen;
       brand.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
     });
+    // 下拉弹层是挂在 body 上的（避免被滚动容器裁剪），所以它的点击要在 document 上接
+    document.addEventListener('click', (ev) => {
+      const opt = ev.target.closest('.sel-opt');
+      if (opt && openSel) {
+        if (opt.dataset.v !== '') commitSel(openSel, opt.dataset.v);
+        return;
+      }
+    });
     document.addEventListener('click', (ev) => {
       if (!$('#brandMenu').hidden && !ev.target.closest('#brandMenu') && !ev.target.closest('#brandBtn')) {
         $('#brandMenu').hidden = true;
@@ -967,14 +1143,43 @@
   async function openFloat(mini) {
     if (DEMO) { toast('演示模式', 'ok'); return; }
     try {
-      const d = await api('/api/window', { json: { mini: mini !== false, topmost: true } });
+      const d = await api('/api/window', { json: { action: 'open', mini: mini !== false, topmost: true } });
       toast(d.ok ? '已打开悬浮窗（置顶）' : '无法打开窗口', d.ok ? 'ok' : 'err');
     } catch (e) { toast('打开失败：' + e.message, 'err'); }
+  }
+
+  // 悬浮窗「展开」：把这一个窗口变大并切换到主界面，而不是另开一个窗口
+  async function expandWindow() {
+    if (DEMO) { toast('演示模式', 'ok'); return; }
+    try {
+      const d = await api('/api/window', { json: { action: 'expand', mini: true } });
+      if (d.result === 'expanded') {
+        location.replace(location.pathname + '?t=' + encodeURIComponent(TOKEN));
+        return;
+      }
+      if (d.result === 'focus-main') { toast('主窗口已打开，已关闭悬浮窗', 'ok'); return; }
+      // 拿不到原生窗口（比如用浏览器打开）：退化成开一个新窗口
+      location.href = location.pathname + '?t=' + encodeURIComponent(TOKEN);
+    } catch (e) {
+      location.href = location.pathname + '?t=' + encodeURIComponent(TOKEN);
+    }
+  }
+
+  function winCtl(action) {
+    api('/api/window', { json: { action: action, mini: MINI } }).catch(() => {});
   }
 
   /* 表单事件：滑块 / 步进 / 文本 / 开关 */
   function onInput(ev) {
     const el = ev.target;
+    if (el.classList.contains('sel-input')) {
+      if (ev.type !== 'input') return;             // change/blur 不要重开弹层
+      const sel = el.closest('.sel');
+      if (!sel) return;
+      if (openSel !== sel) openSelect(sel, el.value);
+      else filterSelPop(sel, el.value);
+      return;
+    }
     const holder = el.closest('[data-ns]');
     if (!holder) return;
     const ns = holder.dataset.ns;
@@ -1008,26 +1213,28 @@
 
   function onClickControls(ev) {
     const selBtn = ev.target.closest('.sel-btn');
-    if (selBtn) { openSelect(selBtn.closest('.sel')); return; }
+    if (selBtn) {
+      const sel = selBtn.closest('.sel');
+      if (openSel === sel) { closeSel(); revertSelLabel(sel); } else openSelect(sel);
+      return;
+    }
 
     const opt = ev.target.closest('.sel-opt');
     if (opt && openSel) {
-      const ns = openSel.dataset.ns, k = openSel.dataset.k;
-      setValue(ns, k, opt.dataset.v);
-      openSel.dataset.v = opt.dataset.v;
-      const spec = specOf(ns, k);
-      openSel.querySelector('.sel-val').textContent = spec ? optLabel(spec, opt.dataset.v) : opt.textContent;
-      closeSel();
-      if (ns === 'launch') renderBudget();
+      if (opt.dataset.v === '') return;      // "没有匹配项"
+      commitSel(openSel, opt.dataset.v);
       return;
     }
 
     const stepBtn = ev.target.closest('.step button');
     if (stepBtn) {
-      const holder = stepBtn.closest('[data-ns]');
-      const ns = holder.dataset.ns, k = holder.dataset.k;
+      // data-ns 在 input 上，不在 .step 容器上 —— 之前用 closest('[data-ns]') 拿到 null，点了当然没反应
+      const box = stepBtn.closest('.step');
+      const input = box && box.querySelector('input[type="number"]');
+      if (!input) return;
+      const ns = input.dataset.ns, k = input.dataset.k;
       const spec = specOf(ns, k);
-      const input = holder.querySelector('input[type="number"]');
+      if (!spec) return;
       const st = parseFloat(spec.step || (spec.kind === 'int' ? 1 : 0.01));
       let v = parseFloat(input.value);
       if (isNaN(v)) v = parseFloat(spec.default || '0');
@@ -1043,6 +1250,74 @@
       setValue(ns, k, v);
       if (ns === 'launch') renderBudget();
     }
+  }
+
+  function filterSelPop(sel, q) {
+    const pop = sel._pop;
+    if (!pop) return;
+    const spec = selSpec(sel);
+    const query = (q || '').trim().toLowerCase();
+    Array.from(pop.children).forEach((o) => {
+      const label = (o.textContent || '').toLowerCase();
+      const hit = !query || label.includes(query) || String(o.dataset.v || '').toLowerCase() === query;
+      o.style.display = hit ? '' : 'none';
+    });
+    const first = Array.from(pop.children).find((o) => o.style.display !== 'none' && o.dataset.v !== '');
+    if (first) setActiveOpt(pop, first);
+  }
+
+  function onSelKey(ev) {
+    const inp = ev.target.closest && ev.target.closest('.sel-input');
+    if (!inp) return;
+    const sel = inp.closest('.sel');
+    const pop = sel._pop;
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      if (!pop) { openSelect(sel, ''); return; }
+      moveActiveOpt(pop, ev.key === 'ArrowDown' ? 1 : -1);
+      return;
+    }
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      const act = activeOpt(pop);
+      if (act && act.dataset.v !== '') commitSel(sel, act.dataset.v);
+      else {
+        // 没有高亮项时，直接按输入文本找第一个匹配
+        const q = inp.value.trim().toLowerCase();
+        const spec = selSpec(sel);
+        const hit = (spec.options || []).find(([v, label]) =>
+          label.toLowerCase() === q || String(v).toLowerCase() === q || label.toLowerCase().startsWith(q));
+        if (hit) commitSel(sel, hit[0]);
+        else revertSelLabel(sel);
+      }
+      inp.blur();
+      return;
+    }
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      closeSel();
+      revertSelLabel(sel);
+      inp.blur();
+      return;
+    }
+    if (ev.key === 'Tab') {
+      const act = activeOpt(pop);
+      if (act && act.dataset.v !== '') commitSel(sel, act.dataset.v);
+      else revertSelLabel(sel);
+      closeSel();
+    }
+  }
+
+  function onSelBlur(ev) {
+    const inp = ev.target.closest && ev.target.closest('.sel-input');
+    if (!inp) return;
+    const sel = inp.closest('.sel');
+    // 点到弹层上不算失焦
+    setTimeout(() => {
+      if (openSel !== sel) return;
+      closeSel();
+      revertSelLabel(sel);
+    }, 120);
   }
 
   function setTab(name) {
@@ -1092,10 +1367,16 @@
       hist.push([now - i, 3120 + Math.sin(i / 22) * 90, tps, Math.round(18000 + (160 - i) * 46)]);
     }
     const models = [
-      { id: 'models\\big\\Qwen3-35B-A3B-Q6_K.gguf', label: 'Qwen3·35B-A3B', spec: '35B-A3B', quant: 'Q6_K',
+      { id: 'models\\big\\Qwen3-35B-A3B-Q6_K.gguf',
+        label: 'Qwen3-35B-A3B-uncensored-MTP-Preserved-APEX-Quality', spec: '35B-A3B', quant: '混合',
+        quant_mix: [{ type: 'Q6_K', pct: 39.1 }, { type: 'IQ4_XS', pct: 36.4 }, { type: 'Q5_K', pct: 23.5 }],
+        mmproj_name: 'mmproj-Qwen3-35B-A3B-APEX-F16.gguf', mmproj_size: 899283072,
         size: 23514746272, dir: 'big', has_mmproj: true, has_nextn: true, arch: 'qwen3moe',
         n_layers: 41, n_expert: 256, n_ctx_train: 262144, selected: true, running: true },
-      { id: 'models\\ud-q4km\\Qwen3-35B-A3B-UD-Q4_K_M.gguf', label: 'Qwen3·UD·Q4_K_M', spec: '35B-A3B', quant: 'Q4_K_M',
+      { id: 'models\\ud-q4km\\Qwen3-35B-A3B-UD-Q4_K_M.gguf',
+        label: 'Qwen3-35B-A3B-UD-Q4_K_M', spec: '35B-A3B', quant: '混合',
+        quant_mix: [{ type: 'Q4_K', pct: 54.6 }, { type: 'Q5_K', pct: 30.9 }, { type: 'Q8_0', pct: 9.2 }, { type: 'Q6_K', pct: 4.8 }],
+        mmproj_name: 'mmproj-F16.gguf', mmproj_size: 899283584,
         size: 22663387424, dir: 'ud-q4km', has_mmproj: true, has_nextn: true, arch: 'qwen3moe',
         n_layers: 41, n_expert: 256, n_ctx_train: 262144, selected: false, running: false },
     ];
@@ -1200,7 +1481,7 @@
         + '<button class="btn ghost" id="btnExpand">展开</button>';
       $('.main').appendChild(bar);
       $('#btnMiniToggle').addEventListener('click', toggleRun);
-      $('#btnExpand').addEventListener('click', () => openFloat(false));
+      $('#btnExpand').addEventListener('click', expandWindow);
     }
     const qt = qs.get('tab');
     if (qt && !MINI) setTab(qt); else moveInk();

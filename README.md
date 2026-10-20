@@ -24,7 +24,10 @@ Everything is local. No telemetry, no account, no cloud.
 
 ## Features
 
-- **Model library** — recursive scan of `models/`, real GGUF metadata, `mmproj` / MTP detection, one-click load.
+- **Model library** — recursive scan of `models/`, real GGUF metadata, one-click load.
+  Quantisation is computed from **tensor byte shares** (most GGUFs are mixed, e.g. `Q6_K 39% · IQ4_XS 36% · Q5_K 23%`),
+  not from the `general.file_type` tag, which only says "MOSTLY_…". Models are named after their file, and the
+  vision projector (`mmproj`) is listed with a switch to enable/disable it per model.
 - **Load / swap / restart** — one state machine (`stopped → starting → running → stopping`) plus an
   automatic warm-up request, so the first real prompt is not the one paying for graph allocation.
 - **VRAM & CUDA panel** — `-ngl`, `-ot`, `-fa`, `-fit`, `-t`, `-b`, `-ub`, `--cache-ram`, `--keep`,
@@ -168,6 +171,10 @@ windows are closed). The budget bar turns amber before you hit the wall.
 
 **No window appears.** Some security policies block Edge's `--app` mode; the app then falls back to
 your default browser (see `app.log`). `--browser` forces that path.
+
+**Antivirus complains.** The release is an unsigned PyInstaller build, which some engines flag heuristically.
+Verify it against the release hash, whitelist the folder, or run from source. The app never phones home; the only
+network activity is `127.0.0.1`.
 
 **The exe does nothing when double-clicked.** Usually an antivirus sandbox or a protected folder.
 Move the folder somewhere else (for example next to `llama-server.exe`), check `crash.log` beside the

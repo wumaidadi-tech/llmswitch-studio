@@ -89,6 +89,16 @@
           <span id="vramTxt">— / —</span>
         </div>
       </div>
+      <button class="mini-model" id="miniModel" hidden>
+        <i class="mini-dot"></i>
+        <span id="miniModelName">—</span>
+        <svg viewBox="0 0 12 12"><path d="M2 4l4 4 4-4"/></svg>
+      </button>
+      <div class="win-ctrls no-drag">
+        <button data-win="min" title="最小化"><svg viewBox="0 0 12 12"><path d="M2.5 6h7"/></svg></button>
+        <button data-win="max" title="最大化 / 还原"><svg viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" rx="1"/></svg></button>
+        <button data-win="close" title="关闭"><svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6"/></svg></button>
+      </div>
     </header>
 
     <nav class="tabs" id="tabs">
@@ -114,6 +124,7 @@
           <span id="warnText"></span>
         </div>
 
+        <div class="mini-meta" id="miniMeta"></div>
         <div class="grid stats">
           <div class="card stat">
             <div class="stat-h"><span>解码速度</span><svg viewBox="0 0 24 24" class="i"><path d="M3 17l5-6 4 3 4-7 5 5"/></svg></div>
