@@ -172,20 +172,29 @@
       $('#miniModel').hidden = false;
       $('#miniModelName').textContent = c ? midName(c.label, 28) : '没有模型';
       $('#miniModel').title = (c ? c.label : '') + (S.status.pid ? ' · PID ' + S.status.pid : '');
-      const mm = $('#miniMeta');
+      const mg = $('#miniGrid');
       const capK = Math.round((S.live.ctx_cap || 0) / 1024);
       const usedK = Math.round((S.live.ctx_used || 0) / 1024);
       const lc = S.cfg.launch || {};
-      const cfgLine = (lc.ctx === 'auto' ? (S.status.ctx || '自动') : (lc.ctx + 'K'))
-        + ' · ' + (S.status.kv || lc.kv || '—')
-        + (lc.spec === 'draft-mtp' ? ' · MTP' : '')
-        + (lc.mmproj && c && c.has_mmproj ? ' · 视觉' : '');
-      if (mm) {
-        mm.innerHTML = '<span title="显存占用">显存 <b>' + (S.live.gpu.total
-            ? ((S.live.gpu.used / 1024).toFixed(1) + ' / ' + (S.live.gpu.total / 1024).toFixed(1))
-            : '—') + '</b>G</span>'
-          + '<span title="启动配置">' + esc(cfgLine) + '</span>'
-          + '<span title="上下文剩余">余 <b>' + (capK ? Math.max(0, capK - usedK) + 'K' : '—') + '</b></span>';
+      if (mg) {
+        // 四宫格：速度 / 上下文+进度条 / 显存 / 剩余（配置用标签，不重复 128K）
+        $('#mgTps').textContent = (S.live.tps || 0).toFixed(1);
+        $('#mgCtx').textContent = usedK || '0';
+        $('#mgCtxCap').textContent = capK ? '/ ' + capK + 'K' : '/ —';
+        const bar = $('#mgBar');
+        const pct = capK ? clamp(usedK / capK * 100, 0, 100) : 0;
+        bar.style.width = pct + '%';
+        bar.classList.toggle('hot', pct > 85);
+        const gpu = S.live.gpu || {};
+        $('#mgVram').textContent = gpu.total
+          ? (((gpu.used || 0) / 1024).toFixed(1) + ' / ' + (gpu.total / 1024).toFixed(1))
+          : '—';
+        $('#mgLeft').textContent = capK ? Math.max(0, capK - usedK) + 'K' : '—';
+        const tags = [];
+        if (S.status.kv) tags.push(S.status.kv);
+        if (lc.spec === 'draft-mtp') tags.push('MTP');
+        if (lc.mmproj && c && c.has_mmproj) tags.push('视觉');
+        $('#mgTags').innerHTML = tags.map((t) => '<span>' + esc(t) + '</span>').join('');
       }
     }
     $('#verTag').textContent = 'v' + S.version;

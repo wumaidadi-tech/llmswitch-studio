@@ -526,7 +526,7 @@ body.mini .app { display: flex; flex-direction: column; padding: 10px; gap: 8px;
 body.mini .main { flex: 1; min-height: 0; }
 body.mini .content { flex: 1; display: flex; flex-direction: column; }
 body.mini .sidebar, body.mini .tabs, body.mini .side-actions { display: none; }
-body.mini .topbar { padding: 10px 14px; border-radius: 18px; }
+body.mini .topbar { padding: 8px 12px; border-radius: 18px; }
 body.mini .tb-left h1 { font-size: 14.5px; }
 body.mini .tb-tags { display: none; }
 body.mini .tb-right { gap: 10px; }
@@ -547,6 +547,29 @@ body.mini .mini-model span { flex: 1 1 0%; min-width: 0; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
 body.mini .mini-model svg { width: 12px; height: 12px; flex: none; fill: none; stroke: var(--ink3);
   stroke-width: 1.8; stroke-linecap: round; }
+.mini-grid { display: none; }
+body.mini .mini-grid { display: grid; grid-template-columns: 1fr 1fr;
+  grid-auto-rows: min-content; gap: 8px; flex: 1 1 auto; min-height: 0; align-content: start; }
+.mtile.span2 { grid-column: 1 / -1; }
+.mrow { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.mrest { font-size: 10.5px; color: var(--ink3); white-space: nowrap; }
+.mrest b { color: var(--ink2); font-weight: 600; font-variant-numeric: tabular-nums; }
+.mtile { position: relative; padding: 7px 10px 8px; border-radius: 13px; display: flex;
+  flex-direction: column; justify-content: center;
+  background: rgba(12,16,24,.42); border: 1px solid var(--line-soft);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.10); min-width: 0; }
+.mlabel { display: block; font-size: 10.5px; color: var(--ink3); letter-spacing: .02em; }
+.mval { display: flex; align-items: baseline; gap: 4px; margin-top: 2px; min-width: 0; }
+.mval b { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums;
+  color: #eef3fb; white-space: nowrap; }
+.mval em { font-style: normal; font-size: 10.5px; color: var(--ink3); white-space: nowrap; }
+.mtile .meter { height: 3px; margin-top: 5px; border-radius: 99px; }
+.mtags { display: flex; gap: 4px; margin-top: 3px; overflow: hidden; }
+.mval .mtags { margin: 0 0 0 auto; flex: none; }
+.mrow .mtags { display: flex; gap: 6px; margin: 0 0 0 8px; min-width: 0; overflow: hidden; }
+.mrow .mtags span { font-size: 10px; padding: 0; border: 0; background: none; color: #7f8b9e; }
+.mtags span { font-size: 9.5px; padding: 1px 6px; border-radius: 99px; color: #a9c9e6;
+  background: rgba(125,211,252,.12); border: 1px solid rgba(125,211,252,.22); white-space: nowrap; }
 .mini-meta { display: none; }
 body.mini .mini-meta { display: flex; justify-content: space-between; gap: 10px; padding: 0 4px;
   min-width: 0; overflow: hidden;
@@ -564,14 +587,15 @@ body.mini .tb-right { display: none; }
 body.mini .metric-inline b { font-size: 16px; }
 body.mini .vram-chip { display: none; }
 body.mini .content { padding: 0; overflow: hidden; }
-body.mini .grid.stats { grid-template-columns: 1fr 1fr; gap: 8px; margin: 0; }
+body.mini .grid.stats { display: none; }
 body.mini .stat { padding: 10px 12px; border-radius: 14px; min-height: 0; }
 body.mini .stat:nth-child(n+3) { display: none; }
 body.mini .stat-v { margin: 3px 0 0; }
 body.mini .stat-v b { font-size: 20px; }
 body.mini .spark, body.mini .stat-f, body.mini .stat-h svg { display: none; }
 /* 悬浮窗也要能一眼看出上下文用了多少：只给"上下文"那张卡留一条细进度条 */
-body.mini .meter { display: none; }
+body.mini .stat .meter { display: none; }
+body.mini .mini-grid .meter { display: block; }
 body.mini .stat:nth-child(2) .meter { display: block; height: 4px; margin-top: 8px; border-radius: 99px; }
 body.mini .chart-card, body.mini .grid.two, body.mini .warn-strip,
 body.mini .view[data-view]:not([data-view="dashboard"]) { display: none; }

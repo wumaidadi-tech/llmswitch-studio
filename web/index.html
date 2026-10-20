@@ -124,7 +124,25 @@
           <span id="warnText"></span>
         </div>
 
-        <div class="mini-meta" id="miniMeta"></div>
+        <div class="mini-grid" id="miniGrid">
+          <div class="mtile span2">
+            <div class="mrow">
+              <span class="mlabel">上下文</span>
+              <span class="mtags" id="mgTags"></span>
+              <span class="mrest">剩余 <b id="mgLeft">—</b></span>
+            </div>
+            <div class="mval"><b id="mgCtx">—</b><em id="mgCtxCap">/ —</em></div>
+            <div class="meter"><i id="mgBar"></i></div>
+          </div>
+          <div class="mtile">
+            <span class="mlabel">解码速度</span>
+            <div class="mval"><b id="mgTps">—</b><em>tok/s</em></div>
+          </div>
+          <div class="mtile">
+            <span class="mlabel">显存</span>
+            <div class="mval"><b id="mgVram">—</b><em>GB</em></div>
+          </div>
+        </div>
         <div class="grid stats">
           <div class="card stat">
             <div class="stat-h"><span>解码速度</span><svg viewBox="0 0 24 24" class="i"><path d="M3 17l5-6 4 3 4-7 5 5"/></svg></div>

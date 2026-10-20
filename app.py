@@ -281,7 +281,7 @@ def open_window(url, mini=False, topmost=False, w=1280, h=880, pos=None):
     exe = find_edge()
     if not exe:
         return None
-    sw, sh = (w, h) if not mini else (400, 236)
+    sw, sh = (w, h) if not mini else (400, 276)
     pos = pos or (None, None)
     args = [exe,
             "--app=" + url,
