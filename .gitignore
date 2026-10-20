@@ -1,0 +1,21 @@
+# build artifacts
+dist/
+build/
+*.spec
+
+# local state / logs / edge profile
+.workbuddy/
+*.log
+crash.log
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# editors
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

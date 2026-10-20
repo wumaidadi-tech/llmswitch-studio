@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLMSwitch Studio</title>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+
+<!-- 背景：极光色块 + 颗粒。玻璃需要有内容可折射，纯色背景看不出材质 -->
+<div class="backdrop" aria-hidden="true">
+  <div class="aurora a1"></div>
+  <div class="aurora a2"></div>
+  <div class="aurora a3"></div>
+  <div class="aurora a4"></div>
+  <div class="grain"></div>
+  <div class="vignette"></div>
+</div>
+
+<!-- 液态玻璃滤镜容器：glass.js 会按元素尺寸往这里注入位移图 -->
+<svg id="lg-defs" width="0" height="0" aria-hidden="true" style="position:absolute"></svg>
+
+<div class="app" id="app">
+  <!-- ============ 侧栏 ============ -->
+  <aside class="sidebar glass" data-glass="hero">
+    <button class="brand" id="brandBtn" title="打开菜单">
+      <span class="brand-mark">
+        <span class="pulse"></span>
+        <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h10M4 17h7"/></svg>
+      </span>
+      <span class="brand-txt">
+        <b>LLMSwitch</b>
+        <span>Studio <em id="verTag">v2</em></span>
+      </span>
+      <svg class="brand-caret" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+
+    <div class="popover glass" id="brandMenu" hidden>
+      <button data-cmd="home">概览</button>
+      <button data-cmd="float">打开悬浮窗</button>
+      <button data-cmd="logs">查看日志</button>
+      <button data-cmd="folder">打开数据目录</button>
+      <button data-cmd="about">关于与快捷键</button>
+    </div>
+
+    <div class="status-hero">
+      <div class="ring" id="ring"><div class="ring-in"><span class="dot" id="dot"></span></div></div>
+      <div class="status-meta">
+        <div class="status-title" id="stageText">已停止</div>
+        <div class="status-sub" id="stageSub">等待启动</div>
+      </div>
+    </div>
+
+    <div class="side-actions">
+      <button class="btn primary" id="btnToggle" title="启动 / 停止 (Alt+S)">
+        <svg viewBox="0 0 24 24" class="i"><path d="M8 5.5v13l11-6.5z"/></svg><span>启动</span>
+      </button>
+      <button class="btn ghost icon" id="btnRestart" title="重启 (Alt+R)" disabled>
+        <svg viewBox="0 0 24 24" class="i"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+      </button>
+      <button class="btn ghost icon" id="btnFloat" title="打开悬浮窗">
+        <svg viewBox="0 0 24 24" class="i"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="12" y="11" width="6" height="6" rx="1"/></svg>
+      </button>
+    </div>
+
+    <div class="side-sep"><span>模型</span><b id="modelCount">0</b></div>
+    <div class="model-list" id="modelList"></div>
+
+    <div class="side-foot">
+      <div class="foot-row"><span>显存</span><b id="footVram">—</b></div>
+      <div class="foot-row"><span>服务端口</span><b id="footPort">8080</b></div>
+      <div class="foot-hint">左键点模型即切换 · 悬浮窗可置顶显示</div>
+    </div>
+  </aside>
+
+  <!-- ============ 主区 ============ -->
+  <main class="main">
+    <header class="topbar glass" data-glass="hero">
+      <div class="tb-left">
+        <h1 id="tbModel">—</h1>
+        <div class="tb-tags" id="tbTags"></div>
+      </div>
+      <div class="tb-right">
+        <div class="pill" id="pillStage"><i></i><span>已停止</span></div>
+        <div class="metric-inline"><span class="k">tok/s</span><b id="tbTps">—</b></div>
+        <div class="vram-chip" id="vramChip" title="显存占用">
+          <div class="vram-bar"><i id="vramFill"></i></div>
+          <span id="vramTxt">— / —</span>
+        </div>
+      </div>
+    </header>
+
+    <nav class="tabs" id="tabs">
+      <button data-tab="dashboard" class="on">概览</button>
+      <button data-tab="models">模型</button>
+      <button data-tab="runtime">运行</button>
+      <button data-tab="sampling">采样</button>
+      <button data-tab="logs">日志</button>
+      <span class="tab-ink" id="tabInk"></span>
+    </nav>
+
+    <div class="content" id="content">
+      <!-- ---------- 概览 ---------- -->
+      <section class="view on" data-view="dashboard">
+        <div class="warn-strip setup" id="setupStrip" hidden>
+          <svg viewBox="0 0 24 24" class="i"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+          <span id="setupText">还没有指定 llama.cpp 目录：</span>
+          <input class="setup-input" id="setupInput" placeholder="含 llama-server.exe 的文件夹路径">
+          <button class="btn mini primary" id="setupSave">保存</button>
+        </div>
+        <div class="warn-strip" id="warnStrip" hidden>
+          <svg viewBox="0 0 24 24" class="i"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+          <span id="warnText"></span>
+        </div>
+
+        <div class="grid stats">
+          <div class="card stat">
+            <div class="stat-h"><span>解码速度</span><svg viewBox="0 0 24 24" class="i"><path d="M3 17l5-6 4 3 4-7 5 5"/></svg></div>
+            <div class="stat-v"><b id="sTps">0.0</b><em>tok/s</em></div>
+            <canvas class="spark" data-spark="tps" height="40"></canvas>
+            <div class="stat-f" id="sTpsFoot">等待启动</div>
+          </div>
+          <div class="card stat">
+            <div class="stat-h"><span>上下文占用</span><svg viewBox="0 0 24 24" class="i"><path d="M4 6h16M4 12h16M4 18h10"/></svg></div>
+            <div class="stat-v"><b id="sCtx">0</b><em>K <span class="of" id="sCtxCap">/ —</span></em></div>
+            <div class="meter"><i id="ctxFill"></i></div>
+            <div class="stat-f" id="sCtxFoot">来自 /slots 的实时值</div>
+          </div>
+          <div class="card stat">
+            <div class="stat-h"><span>显存</span><svg viewBox="0 0 24 24" class="i"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 7v10M12 7v10M17 7v10"/></svg></div>
+            <div class="stat-v"><b id="sVram">0</b><em>MiB</em></div>
+            <canvas class="spark" data-spark="vram" height="40"></canvas>
+            <div class="stat-f" id="sVramFoot">—</div>
+          </div>
+          <div class="card stat">
+            <div class="stat-h"><span>思考预算</span><svg viewBox="0 0 24 24" class="i"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg></div>
+            <div class="stat-v"><b id="sBudget">0</b><em>tokens</em></div>
+            <div class="stat-f" id="sBudgetFoot">可在「采样」页调整</div>
+          </div>
+        </div>
+
+        <div class="card chart-card">
+          <div class="card-h">
+            <div><h3>实时吞吐与上下文</h3><p>每秒采样一次 · 来自 /metrics 与 /slots</p></div>
+            <div class="legend">
+              <span><i class="lg-a"></i>tok/s</span>
+              <span><i class="lg-b"></i>上下文 %</span>
+              <span class="muted" id="chartAge">—</span>
+            </div>
+          </div>
+          <canvas id="mainChart" height="210"></canvas>
+        </div>
+
+        <div class="grid two">
+          <div class="card">
+            <div class="card-h"><div><h3>本次启动参数</h3><p>实际传给 llama-server 的组合</p></div>
+              <button class="btn mini ghost" id="btnCopyCmd">查看命令行</button></div>
+            <div class="kv-table" id="launchTable"></div>
+          </div>
+          <div class="card">
+            <div class="card-h"><div><h3>环境</h3><p>显卡 / 构建 / 路径</p></div></div>
+            <div class="kv-table" id="envTable"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- 模型 ---------- -->
+      <section class="view" data-view="models">
+        <div class="view-h">
+          <div><h2>模型</h2><p>递归扫描 models/，元数据直接读自 GGUF 头部</p></div>
+          <button class="btn ghost" id="btnRescan">
+            <svg viewBox="0 0 24 24" class="i"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>重新扫描
+          </button>
+        </div>
+        <div class="grid models" id="modelGrid"></div>
+        <div class="card models-foot">
+          <div class="grow"><span>模型目录 </span><code id="modelsDir">—</code></div>
+          <div><b id="modelsCount">0</b> 个 · <b id="modelsSize">0</b></div>
+          <button class="btn mini ghost" id="btnOpenModels">打开目录</button>
+        </div>
+      </section>
+
+      <!-- ---------- 运行 ---------- -->
+      <section class="view" data-view="runtime">
+        <div class="view-h">
+          <div><h2>运行</h2><p>改动保存后，正在运行的进程需要重启才生效</p></div>
+          <div class="hdr-actions">
+            <button class="btn ghost" id="btnAutoCtx">自动挑档</button>
+            <button class="btn ghost" id="btnApplyRestart">保存并重启</button>
+            <button class="btn ghost" id="btnSaveLaunch">已保存</button>
+          </div>
+        </div>
+        <div class="grid runtime">
+          <div class="card span2">
+            <div class="card-h"><div><h3>显存规划</h3><p>KV 在启动时一次性预留，开大不会「用多少占多少」</p></div></div>
+            <div class="budget-row">
+              <div class="budget">
+                <div class="budget-bar">
+                  <i class="seg-used" id="segModel"></i>
+                  <i class="seg-need" id="segKv"></i>
+                  <i class="seg-free" id="segFree"></i>
+                </div>
+                <div class="budget-legend">
+                  <span><i class="c0"></i>已占用 <b id="bdUsed">—</b></span>
+                  <span><i class="c1"></i>预计需要 <b id="bdNeed">—</b></span>
+                  <span><i class="c2"></i>可用 <b id="bdFree">—</b></span>
+                </div>
+              </div>
+              <div class="hint" id="budgetHint">—</div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-h"><div><h3>上下文与卸载</h3><p>决定模型怎么放进显存</p></div></div>
+            <div class="fields" id="fieldsCtx"></div>
+          </div>
+          <div class="card">
+            <div class="card-h"><div><h3>计算与批处理</h3><p>影响速度与峰值显存</p></div></div>
+            <div class="fields" id="fieldsPerf"></div>
+          </div>
+          <div class="card span2">
+            <div class="card-h"><div><h3>缓存、投机与接口</h3><p>进阶项；不确定就保持默认</p></div></div>
+            <div class="fields" id="fieldsAdv"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- 采样 ---------- -->
+      <section class="view" data-view="sampling">
+        <div class="view-h">
+          <div><h2>采样</h2><p>每个模型独立保存，修改后重启生效</p></div>
+          <div class="hdr-actions">
+            <button class="btn ghost" id="btnExport">导出</button>
+            <button class="btn ghost" id="btnReset">恢复默认</button>
+            <button class="btn ghost" id="btnSaveSampling">已保存</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-h"><div><h3>预设</h3><p>内置风格只改采样；自定义预设可保存整套参数</p></div>
+            <button class="btn mini ghost" id="btnSavePreset">另存为预设…</button></div>
+          <div class="chips" id="presetChips"></div>
+        </div>
+        <div class="card">
+          <div class="card-h"><div><h3>生成参数</h3><p>括号里是它解决的问题</p></div></div>
+          <div class="fields dense" id="samplingFields"></div>
+        </div>
+      </section>
+
+      <!-- ---------- 日志 ---------- -->
+      <section class="view" data-view="logs">
+        <div class="view-h">
+          <div><h2>日志</h2><p>llama-server 的 --log-file 尾部</p></div>
+          <div class="hdr-actions">
+            <label class="switch"><input type="checkbox" id="logAuto" checked><span></span>自动刷新</label>
+            <button class="btn ghost" id="btnOpenLog">用记事本打开</button>
+            <button class="btn ghost" id="btnCopyLog">复制</button>
+          </div>
+        </div>
+        <pre class="logbox" id="logBox">（暂无日志）</pre>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<!-- 通用弹窗：命令行 / 导出 / 预设命名 -->
+<div class="modal" id="modal" hidden>
+  <div class="modal-card glass" data-glass="hero">
+    <div class="modal-h"><h3 id="modalTitle">标题</h3>
+      <button class="btn icon ghost" id="modalClose">✕</button></div>
+    <pre id="modalBody"></pre>
+    <div class="modal-f">
+      <input id="modalInput" class="modal-input" hidden placeholder="预设名称">
+      <button class="btn ghost" id="modalCancel" hidden>取消</button>
+      <button class="btn primary" id="modalOk">确定</button>
+    </div>
+  </div>
+</div>
+
+<script src="/js/glass.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>
