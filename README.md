@@ -30,6 +30,8 @@ Everything is local. No telemetry, no account, no cloud.
   vision projector (`mmproj`) is listed with a switch to enable/disable it per model.
 - **Load / swap / restart** — one state machine (`stopped → starting → running → stopping`) plus an
   automatic warm-up request, so the first real prompt is not the one paying for graph allocation.
+- **KV precision** — all nine types llama.cpp accepts (f32 / f16 / bf16 / q8_0 / q5_1 / q5_0 / q4_1 /
+  iq4_nl / q4_0) plus auto, with the VRAM estimate scaled per type.
 - **VRAM & CUDA panel** — `-ngl`, `-ot`, `-fa`, `-fit`, `-t`, `-b`, `-ub`, `--cache-ram`, `--keep`,
   `--no-kv-offload`, `--moe-cache-mib`, speculative decoding, KV cache type — all editable, with a
   live budget bar (used / needed / free).
@@ -55,6 +57,13 @@ Everything is local. No telemetry, no account, no cloud.
   KV over budget…). The dashboard failure strip jumps straight there, and results copy in one click.
 - **Undo** — "auto-pick", "load preset" and LoRA edits push a local draft snapshot first; **Undo** steps
   back without writing anything to disk.
+- **Tray & autostart** (Service page) — closing the window can keep the app running in the tray
+  (open main / HUD / start·stop / quit from the menu); autostart writes a HKCU Run entry and opens
+  only the HUD at login. No admin rights needed.
+- **Write into clients** — besides copying, write the **WorkBuddy `models.json`** entry (merged by id,
+  unknown fields kept, backup made) or export a generic `.env` / `client.json` for any agent. Configs
+  owned by other tools (e.g. Codex under cc-switch) are exported, never rewritten.
+- **Log filter** — keyword search plus an "errors only" toggle.
 - **Update check** — menu → Check for updates compares your version with the latest GitHub release.
 - **Logs** — tail of `llama-server` output with error highlighting.
 - **Export** — copy the exact command line that was used, or export JSON / `.bat` / `.sh`.
@@ -201,6 +210,10 @@ Bound to `127.0.0.1` only; every `/api/*` call needs the token from `LLMSwitchDa
 | POST | `/api/open-url` | open a project page (only the repository URL is accepted) |
 | GET | `/api/update` | latest GitHub release compared with the running version |
 | GET | `/api/diagnose` | startup diagnosis: log evidence + config risks + fixes |
+| GET | `/api/clients` | writable client targets (path / writable) |
+| POST | `/api/client-write` | `{"id":"workbuddy\|env\|json"}` — write config with backup |
+| POST | `/api/autostart` | `{"on":true}` — add/remove the HKCU Run entry |
+| POST | `/api/quit` | quit the app (same as the menu item) |
 | POST | `/api/lifecycle` | `{"idle_sleep":true,"idle_minutes":15,"restore_launch":true}` |
 | POST | `/api/wake` | start the server on demand (also wakes it from sleep) |
 | GET | `/wake?t=<token>` | same, for scripts (token lives in `runtime.json`) |

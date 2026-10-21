@@ -90,8 +90,11 @@ LAUNCH_SPECS = [
                   ["64", "64K"], ["128", "128K"], ["256", "256K"]],
          hint="一次对话能记住多少内容，128K 约等于 20 万字。KV 在启动时就按这个值占满显存"),
     dict(key="kv", label="KV 缓存精度", kind="enum", default="auto",
-         options=[["auto", "自动"], ["f16", "f16"], ["q8_0", "q8_0"], ["bf16", "bf16"]],
-         hint="q8_0 约占 f16 一半显存、质量损失很小；自动 = 128K 及以上用 q8_0，以下用 f16"),
+         options=[["auto", "自动"], ["f16", "f16"], ["bf16", "bf16"], ["q8_0", "q8_0"],
+                  ["q5_1", "q5_1"], ["q5_0", "q5_0"], ["q4_1", "q4_1"],
+                  ["iq4_nl", "iq4_nl"], ["q4_0", "q4_0"], ["f32", "f32"]],
+         hint="KV 的存储精度。自动 = 128K 及以上用 q8_0、以下用 f16；q8_0 约为 f16 一半显存、几乎不掉质量；"
+              "q5/q4 系列更省但长文更容易串味；f32 只用于测精度，显存翻倍"),
     dict(key="ngl", label="GPU 层数", kind="int", lo=0, hi=1000, step=1, default="999",
          hint="多少层放到显卡。999 = 全部；显存不够就往下调，调到 0 就全在 CPU 上（很慢）"),
     dict(key="ot", label="张量覆盖", kind="text", default="exps=CPU",
@@ -141,7 +144,9 @@ LAUNCH_BY_KEY = {p["key"]: p for p in LAUNCH_SPECS}
 LAUNCH_INT = {p["key"] for p in LAUNCH_SPECS if p["kind"] == "int"}
 
 CTX_CHOICES = {"auto", "8", "16", "32", "64", "128", "256"}
-KV_CHOICES = {"auto", "f16", "q8_0", "bf16"}
+# 与 llama-server --cache-type-k 的 allowed values 保持一致
+# （b10775: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1）
+KV_CHOICES = {"auto", "f32", "f16", "bf16", "q8_0", "q5_1", "q5_0", "q4_1", "iq4_nl", "q4_0"}
 SPEC_CHOICES = {"draft-mtp", "none"}
 NP_CHOICES = {"auto", "1", "2", "4"}
 
@@ -163,6 +168,7 @@ STATE = {
         "idle_sleep": False,      # 空闲后让 llama-server 自己睡（llama.cpp 原生）
         "idle_minutes": 15,       # 空闲多少分钟后睡
         "restore_launch": True,   # 下次启动本程序时恢复上次的运行状态
+        "tray": False,            # 关窗口后驻留托盘（需重启程序生效）
         "last_running": False,    # 上次退出时服务是否在运行
         "last_model": "",
         "last_at": 0,
@@ -309,14 +315,21 @@ def apply_style(cfg, style):
     return out
 
 
+# 每 1K token 的 KV 占用（MiB），按 llama.cpp 的元素位宽折算，误差 ±10%
+KV_MIB_PER_K = {
+    "f32": 60, "f16": 30, "bf16": 30, "q8_0": 16,
+    "q5_1": 12, "q5_0": 11, "q4_1": 9, "iq4_nl": 9, "q4_0": 9,
+}
+
+
 def vram_need(ctx_tokens, kv, extra_mib=0):
     """估算 llama-server 的总占用 MiB。
 
     经验式：固定开销（CUDA context + 计算缓冲）+ KV。
-        KV 每 1K token：f16 ≈ 30 MiB，q8_0 ≈ 15 MiB
+        KV 每 1K token：f16/bf16 ≈ 30、q8_0 ≈ 16、q5≈11–12、q4≈9、f32 ≈ 60
     这是**估算**，用于启动前预警，不替代实测；不同模型/层数会有偏差。
     """
-    per_k = 30 if kv in ("f16", "bf16") else 15
+    per_k = KV_MIB_PER_K.get(kv, 15)
     return int(2680 + (int(ctx_tokens) / 1024.0) * per_k + extra_mib)
 
 
@@ -382,7 +395,7 @@ def set_lifecycle(**kw):
     with _lock:
         lc = STATE.setdefault("lifecycle", {})
         for k, v in kw.items():
-            if k in ("idle_sleep", "restore_launch", "last_running"):
+            if k in ("idle_sleep", "restore_launch", "last_running", "tray"):
                 lc[k] = bool(v)
             elif k == "idle_minutes":
                 try:
@@ -452,7 +465,7 @@ def _coerce_state(d):
                     STATE["ui"][k] = bool(ui[k])
         lc = d.get("lifecycle")
         if isinstance(lc, dict):
-            for k in ("idle_sleep", "restore_launch", "last_running"):
+            for k in ("idle_sleep", "restore_launch", "last_running", "tray"):
                 if k in lc:
                     STATE["lifecycle"][k] = bool(lc[k])
             for k in ("idle_minutes",):

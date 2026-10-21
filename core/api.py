@@ -22,9 +22,9 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import config, diagnose, gguf, monitor, paths, server
+from . import autostart, clients, config, diagnose, gguf, monitor, paths, server
 
-APP_VERSION = "2.2.1"
+APP_VERSION = "2.3.0"
 REPO_URL = "https://github.com/wumaidadi-tech/llmswitch-studio"
 RELEASES_API = "https://api.github.com/repos/wumaidadi-tech/llmswitch-studio/releases/latest"
 
@@ -50,11 +50,18 @@ _live_lock = threading.Lock()
 
 # 由 app.py 注入：打开主窗口 / 悬浮窗（迷你窗口）
 _window_opener = None
+# 由 app.py 注入：退出整个程序（关窗口 + 结束服务循环）
+_quitter = None
 
 
 def set_window_opener(fn):
     global _window_opener
     _window_opener = fn
+
+
+def set_quitter(fn):
+    global _quitter
+    _quitter = fn
 
 
 def _port_free(port):
@@ -207,6 +214,15 @@ def probe_loop(mgr, stop_evt):
 
 
 # ==================== 快照 ====================
+def _lifecycle_public():
+    lc = config.lifecycle()
+    try:
+        lc["autostart"] = autostart.enabled()
+        lc["autostart_cmd"] = autostart.command()
+    except Exception:
+        lc["autostart"] = False
+    return lc
+
 def _model_public(entry):
     meta = entry.get("meta") or {}
     arch = meta.get("arch") or ""
@@ -291,7 +307,7 @@ def snapshot(mgr):
             "api_key": "123456",
             "wake_url": "http://127.0.0.1:%d/wake?t=<runtime.json 里的 token>" % mgr.port,
         },
-        "lifecycle": config.lifecycle(),
+        "lifecycle": _lifecycle_public(),
         "presets": config.list_presets(),
         "setup": {"needs_llama_dir": not bool(paths.LLAMA_DIR)},
         "ui": config.STATE.get("ui", {}),
@@ -407,6 +423,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(check_update())
             if p == "/api/diagnose":
                 return self._json(diagnose.run(self.mgr))
+            if p == "/api/clients":
+                return self._json({"ok": True, "targets": clients.targets()})
             if p == "/api/export":
                 fmt = (q.get("format") or ["bat"])[0]
                 return self._json(self._export(fmt))
@@ -497,6 +515,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"ok": False, "error": "unknown action"}, 400)
                 return self._json({"ok": ok, "msg": msg, "status": self.mgr.status()})
 
+            if p == "/api/quit":
+                if _quitter is None:
+                    return self._json({"ok": False, "error": "no quit support"}, 400)
+                threading.Timer(0.25, _quitter).start()
+                return self._json({"ok": True})
+
             if p == "/api/wake":
                 st = self.mgr.status()
                 if st["stage"] in ("running", "starting"):
@@ -506,13 +530,39 @@ class Handler(BaseHTTPRequestHandler):
 
             if p == "/api/lifecycle":
                 before = config.lifecycle()
-                fields = {k: body[k] for k in ("idle_sleep", "idle_minutes", "restore_launch")
+                fields = {k: body[k] for k in ("idle_sleep", "idle_minutes", "restore_launch", "tray")
                           if k in body}
                 lc = config.set_lifecycle(**fields) if fields else before
                 changed = (bool(before.get("idle_sleep")) != bool(lc.get("idle_sleep"))
                            or int(before.get("idle_minutes") or 0) != int(lc.get("idle_minutes") or 0))
                 return self._json({"ok": True, "lifecycle": lc,
                                    "needs_restart": bool(changed and self.mgr.stage == "running")})
+
+            if p == "/api/autostart":
+                on = bool(body.get("on"))
+                try:
+                    now = autostart.set_enabled(on)
+                except Exception as exc:                # noqa: BLE001
+                    return self._json({"ok": False, "error": str(exc)}, 500)
+                return self._json({"ok": True, "on": bool(now),
+                                   "command": autostart.command()})
+
+            if p == "/api/client-write":
+                tid = str(body.get("id") or "")
+                cfg = config.get_cfg()
+                entry = config.model_entry()
+                port = int(getattr(self.mgr, "llama_port", paths.DEFAULT_LLAMA_PORT))
+                base = "http://127.0.0.1:%d/v1" % port
+                model = (cfg.get("launch") or {}).get("alias") or "local-model"
+                try:
+                    ctx_tok = int(config.resolve_ctx(cfg, None, 0)[0])
+                except Exception:
+                    ctx_tok = 131072
+                images = bool(entry and entry.get("mmproj")
+                              and (cfg.get("launch") or {}).get("mmproj"))
+                ok, msg, path, bak = clients.write(tid, model, base, "123456", ctx_tok, images)
+                config.log("client-write %s -> %s (%s)" % (tid, path, msg))
+                return self._json({"ok": bool(ok), "msg": msg, "path": path, "backup": bak})
 
             if p == "/api/client-test":
                 port = int(getattr(self.mgr, "llama_port", 0) or 0)

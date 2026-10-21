@@ -811,6 +811,77 @@ def main():
     threading.Thread(target=api.probe_loop, args=(mgr, stop_evt), daemon=True).start()
     config.log("http listening on %s:%d" % (paths.HOST, port))
 
+    # ---- 退出（菜单 / 托盘共用）----
+    def _do_quit():
+        config.log("quit requested")
+        for _t, _w in list(WEBVIEW["win"].items()):
+            try:
+                _w.destroy()
+            except Exception:
+                pass
+        for _title in (paths.APP_TITLE, paths.MINI_TITLE):
+            try:
+                h = find_window(_title)
+                if h:
+                    user32.PostMessageW(ctypes.c_void_p(h), WM_CLOSE, None, None)
+            except Exception:
+                pass
+        stop_evt.set()
+
+    api.set_quitter(_do_quit)
+
+    # ---- 托盘：只有打开开关时才建，失败也不影响主程序 ----
+    TRAY = {"on": bool(lc.get("tray")), "obj": None}
+
+    def _attach_tray_close(w):
+        """关窗口 = 收进托盘（只有开了托盘才这样）。"""
+        if not (TRAY["on"] and w is not None):
+            return
+
+        def _on_close():
+            if stop_evt.is_set():
+                return True
+            try:
+                w.hide()
+                config.log("window hidden to tray")
+            except Exception as exc:               # noqa: BLE001
+                config.log("hide to tray failed %r" % (exc,))
+            return False
+
+        try:
+            w.events.closing += _on_close
+        except Exception as exc:                   # noqa: BLE001
+            config.log("closing hook unavailable: %r" % (exc,))
+
+    if TRAY["on"]:
+        try:
+            from core.tray import Tray
+
+            def _tray_cmd(name):
+                if name == "open":
+                    _win("open", False, False, None, None)
+                elif name == "mini":
+                    _win("open", True, True, None, None)
+                elif name == "toggle":
+                    if mgr.stage in ("running", "starting"):
+                        mgr.stop()
+                    else:
+                        mgr.start(mgr.model_id or config.STATE.get("model"))
+                elif name == "quit":
+                    _do_quit()
+
+            icon = os.path.join(paths.BUNDLE or paths.BASE, "assets", "app.ico")
+            TRAY["obj"] = Tray(icon, "LLMSwitch Studio", {
+                "open": lambda: _tray_cmd("open"),
+                "mini": lambda: _tray_cmd("mini"),
+                "toggle": lambda: _tray_cmd("toggle"),
+                "quit": lambda: _tray_cmd("quit"),
+            }, log=config.log)
+            if not TRAY["obj"].start():
+                config.log("tray: failed to start")
+        except Exception as exc:                   # noqa: BLE001
+            config.log("tray init failed %r" % (exc,))
+
     # 恢复上次的运行状态（LM Studio 的做法：退出时在跑，下次打开自动拉起）
     if lc.get("restore_launch") and lc.get("last_running"):
         def _restore_last():
@@ -832,13 +903,15 @@ def main():
             use_wv = True
             if args.mini:
                 mini_pos = _mini_corner()
-                webview_window(paths.MINI_TITLE, url, MINI_W, MINI_H, mini=True,
-                               topmost=True, x=mini_pos[0], y=mini_pos[1])
+                _mw = webview_window(paths.MINI_TITLE, url, MINI_W, MINI_H, mini=True,
+                                     topmost=True, x=mini_pos[0], y=mini_pos[1])
+                _attach_tray_close(_mw)
             else:
                 mw, mh = clamp_window(int(win.get("w") or MAIN_W),
                                       int(win.get("h") or MAIN_H))
                 mx, my = center_pos(mw, mh)
-                webview_window(paths.APP_TITLE, base_url, mw, mh, x=mx, y=my)
+                _main = webview_window(paths.APP_TITLE, base_url, mw, mh, x=mx, y=my)
+                _attach_tray_close(_main)
                 # 悬浮窗按需创建。不要预建 hidden 窗口：pywebview 的 shown 事件
                 # 对 hidden 窗口永远不触发，之后 show() 会白等 20 秒（已实测）。
             config.log("ui backend: pywebview (frameless=%s)" % FRAMELESS)
@@ -848,7 +921,9 @@ def main():
             open_window(url, args.mini, args.topmost,
                         win.get("w") or MAIN_W, win.get("h") or MAIN_H,
                         (win.get("x"), win.get("y")))
-            threading.Thread(target=watch_windows, args=(stop_evt,), daemon=True).start()
+            if not TRAY["on"]:
+                # 有托盘时窗口关掉也不退出，交给托盘菜单的「退出程序」
+                threading.Thread(target=watch_windows, args=(stop_evt,), daemon=True).start()
 
     try:
         if use_wv:

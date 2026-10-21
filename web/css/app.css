@@ -796,3 +796,14 @@ pre.diag-ev[hidden] { display: none; }
 .notes li b { color: var(--ink); font-weight: 600; }
 .notes code { font-family: var(--mono); font-size: 11px; background: rgba(255,255,255,.06);
   padding: 1px 5px; border-radius: 4px; }
+
+/* 侧栏菜单：退出项与分隔线 */
+#brandMenu button.danger { color: #ffb4c0; }
+#brandMenu button.danger:hover { background: rgba(251,113,133,.14); color: #ffd7dd; }
+#brandMenu button.danger .mi { opacity: .92; }
+
+/* 日志过滤 */
+.log-search { width: 170px; padding: 7px 10px; border-radius: 10px; border: 1px solid var(--line);
+  background: rgba(0,0,0,.28); color: var(--ink); font-size: 12px; outline: none; }
+.log-search:focus { border-color: rgba(125,211,252,.55); box-shadow: 0 0 0 3px rgba(125,211,252,.12); }
+.btn.mini.on { background: rgba(125,211,252,.16); border-color: rgba(125,211,252,.38); color: #dff1ff; }

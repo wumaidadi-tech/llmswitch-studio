@@ -28,6 +28,8 @@
   let undoStack = [];          // 启动参数的回退栈（只存本地草稿，不落盘）
   let restoreDismissed = false;
   let lastDiag = null;         // 最近一次诊断结果（复制用）
+  let clientTargets = null;    // /api/clients 的结果（写入客户端用）
+  let clientTargetsTried = false;
 
   if (MINI) {
     document.body.classList.add('mini');
@@ -211,7 +213,10 @@
     $('#modelCount').textContent = S.models.length;
     $('#verTag').textContent = 'v' + S.version;
     const mm = $('#menuMeta');
-    if (mm) mm.textContent = 'v' + S.version + ' · llama :' + lp;
+    if (mm) {
+      const st = S.status.stage;
+      mm.textContent = (S.live.sleeping ? '休眠中' : stageText(st)) + ' · llama :' + lp;
+    }
   }
 
   /* 悬浮窗：状态 / 模型 / 上下文三行，和主界面共用同一份 snapshot */
@@ -714,9 +719,9 @@
   }
 
   /* ---------------- 显存预算 ---------------- */
+  const KV_MIB_PER_K = { f32: 60, f16: 30, bf16: 30, q8_0: 16, q5_1: 12, q5_0: 11, q4_1: 9, iq4_nl: 9, q4_0: 9 };
   function needOf(ctxK, kv) {
-    const per = (kv === 'f16' || kv === 'bf16') ? 30 : 15;
-    return Math.round(2680 + ctxK * per);
+    return Math.round(2680 + ctxK * (KV_MIB_PER_K[kv] || 15));
   }
 
   function suggestCtx(free) {
@@ -768,8 +773,31 @@
       tag.className = 'tag' + ((st === 'running' || st === 'starting') ? ' run' : '');
     }
     renderClient();
+    ensureClientTargets();
     renderLifecycle();
     renderLoras();
+  }
+
+  function ensureClientTargets() {
+    if (DEMO || clientTargets || clientTargetsTried) return;
+    clientTargetsTried = true;
+    api('/api/clients').then((d) => {
+      clientTargets = d.targets || [];
+      renderClientWrite();
+    }).catch(() => { /* 老后端没有这个接口时静默 */ });
+  }
+
+  function renderClientWrite() {
+    const box = $('#clientWrite');
+    if (!box || !clientTargets) return;
+    const html = clientTargets.map((t) => {
+      const label = t.writable ? ('写入 ' + t.name) : t.name;
+      return '<button class="btn mini ghost" data-write="' + esc(t.id) + '"'
+        + (t.writable ? '' : ' disabled')
+        + ' title="' + esc((t.writable ? '写入 ' : '不直接改：') + t.path
+          + (t.note ? ' · ' + t.note : '')) + '">' + esc(label) + '</button>';
+    }).join('');
+    if (box.dataset.sig !== html) { box.innerHTML = html; box.dataset.sig = html; }
   }
 
   /* ---------------- 客户端接入 ---------------- */
@@ -871,6 +899,29 @@
 
     const last = $('#lcLast');
     if (last) last.textContent = lc.last_running ? '上次：运行中' : '上次：已停止';
+
+    const tray = $('#lcTray');
+    if (tray && document.activeElement !== tray) tray.checked = !!lc.tray;
+    const auto = $('#lcAuto');
+    if (auto && document.activeElement !== auto) auto.checked = !!lc.autostart;
+    const ts = $('#trayState');
+    if (ts) ts.textContent = lc.tray ? '已开启' : '关闭';
+    const as = $('#autoState');
+    if (as) as.textContent = lc.autostart ? '已设置' : '关闭';
+  }
+
+  async function setAutostart(on) {
+    if (DEMO) { S.lifecycle.autostart = !!on; renderLifecycle(); return; }
+    try {
+      const d = await api('/api/autostart', { json: { on: !!on } });
+      if (!d.ok) toast(d.error || '设置失败', 'err');
+      S.lifecycle.autostart = !!d.on;
+      renderLifecycle();
+      toast(d.on ? '已加入开机自启' : '已取消开机自启', 'ok');
+    } catch (e) {
+      toast('设置失败：' + e.message, 'err');
+      renderLifecycle();
+    }
   }
 
   async function setLifecycle(patch) {
@@ -882,7 +933,8 @@
     }
     try {
       const d = await api('/api/lifecycle', { json: patch });
-      S.lifecycle = d.lifecycle;
+      // 后端返回的 lifecycle 没有 autostart（它读注册表），别把它覆盖掉
+      S.lifecycle = Object.assign({}, S.lifecycle, d.lifecycle);
       renderLifecycle();
       renderClient();
       toast(d.needs_restart ? '已保存，重启服务后生效' : '已保存', 'ok');
@@ -1067,20 +1119,34 @@
   }
 
   /* ---------------- 日志 ---------------- */
+  let logLines = [];
+
   async function loadLogs() {
-    if (DEMO) { $('#logBox').innerHTML = demoLog(); return; }
+    if (DEMO) { logLines = demoLog().split('\n'); renderLogs(); return; }
     try {
       const d = await api('/api/logs?n=400');
-      const lines = d.lines || [];
-      $('#logBox').innerHTML = lines.map((ln) => {
-        const e = esc(ln);
-        if (/\bE\b|error|failed/i.test(ln)) return '<span class="e">' + e + '</span>';
-        if (/\bW\b|warn/i.test(ln)) return '<span class="w">' + e + '</span>';
-        return e;
-      }).join('\n') || '（暂无日志）';
-      const box = $('#logBox');
-      box.scrollTop = box.scrollHeight;
+      logLines = d.lines || [];
+      renderLogs();
     } catch (e) { /* 静默 */ }
+  }
+
+  function renderLogs() {
+    const box = $('#logBox');
+    if (!box) return;
+    const q = ($('#logSearch').value || '').trim().toLowerCase();
+    const onlyErr = $('#btnLogErr').classList.contains('on');
+    const rows = logLines.filter((ln) => {
+      if (onlyErr && !/\bE\b|error|failed|out of memory|oom/i.test(ln)) return false;
+      if (q && ln.toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+    box.innerHTML = rows.map((ln) => {
+      const e = esc(ln);
+      if (/\bE\b|error|failed/i.test(ln)) return '<span class="e">' + e + '</span>';
+      if (/\bW\b|warn/i.test(ln)) return '<span class="w">' + e + '</span>';
+      return e;
+    }).join('\n') || (q || onlyErr ? '（没有匹配的日志，清空过滤条件试试）' : '（暂无日志）');
+    if (!q) box.scrollTop = box.scrollHeight;
   }
 
   /* ---------------- 保存 / 动作 ---------------- */
@@ -1438,6 +1504,11 @@
     };
     $('#lcMinus').addEventListener('click', () => bumpMin(-1));
     $('#lcPlus').addEventListener('click', () => bumpMin(1));
+    const lcTray = $('#lcTray');
+    if (lcTray) lcTray.addEventListener('change', () => setLifecycle({ tray: lcTray.checked }));
+    const lcAuto = $('#lcAuto');
+    if (lcAuto) lcAuto.addEventListener('change', () => setAutostart(lcAuto.checked));
+    $('#btnQuit').addEventListener('click', quitApp);
     const lcRestore = $('#lcRestore');
     lcRestore.addEventListener('change', () => {
       syncSwText(lcRestore);
@@ -1493,6 +1564,21 @@
     });
     if (cc) cc.addEventListener('click', () => {});
     $('#btnClientTest').addEventListener('click', testClient);
+    $('#clientWrite').addEventListener('click', async (ev) => {
+      const b = ev.target.closest('[data-write]');
+      if (!b || b.disabled) return;
+      if (DEMO) { toast('演示模式：不会写文件', 'ok'); return; }
+      b.disabled = true;
+      try {
+        const d = await api('/api/client-write', { json: { id: b.dataset.write } });
+        if (d.ok) toast(d.msg + (d.backup ? ' · 原文件已备份' : ''), 'ok');
+        else toast(d.msg || '写入失败', 'err');
+      } catch (e) {
+        toast('写入失败：' + e.message, 'err');
+      } finally {
+        setTimeout(() => { b.disabled = false; }, 900);
+      }
+    });
 
     /* 诊断 / 恢复 */
     $('#warnDiag').addEventListener('click', () => runDiag(true));
@@ -1608,6 +1694,12 @@
     });
 
     $('#btnCopyLog').addEventListener('click', () => { copy($('#logBox').textContent); toast('已复制', 'ok'); });
+    $('#logSearch').addEventListener('input', renderLogs);
+    $('#btnLogErr').addEventListener('click', () => {
+      const b = $('#btnLogErr');
+      b.classList.toggle('on');
+      renderLogs();
+    });
     $('#btnOpenLog').addEventListener('click', () => {
       api('/api/reveal', { json: { target: 'log' } }).catch(() => {});
     });
@@ -1657,9 +1749,13 @@
       brand.setAttribute('aria-expanded', 'false');
       const cmd = b.dataset.cmd;
       if (cmd === 'folder') openDataDir();
+      if (cmd === 'log') api('/api/reveal', { json: { target: 'log' } }).catch(() => {});
       if (cmd === 'ports') focusLlamaPort();
+      if (cmd === 'client') setTab('service');
       if (cmd === 'update') checkUpdate();
+      if (cmd === 'github') openGithub();
       if (cmd === 'about') openAbout();
+      if (cmd === 'quit') quitApp();
     });
 
     $('#btnWeb').addEventListener('click', openWeb);
@@ -1767,6 +1863,12 @@
 
   function winCtl(action) {
     api('/api/window', { json: { action: action, mini: MINI } }).catch(() => {});
+  }
+
+  async function quitApp() {
+    if (DEMO) { toast('演示模式：不会真的退出', 'ok'); return; }
+    if (!confirm('退出 LLMSwitch Studio？\n正在运行的 llama-server 不会自动停止。')) return;
+    try { await api('/api/quit', { json: {} }); } catch (e) { /* 进程可能已经退出 */ }
   }
 
   /* 悬浮窗的模型列表：就地弹出，点选即切换（运行中会自动 swap） */
@@ -2038,6 +2140,7 @@
         root: 'http://127.0.0.1:8080/', model: 'qwen-coder', api_key: '123456',
         wake_url: 'http://127.0.0.1:8770/wake?t=…' },
       lifecycle: { idle_sleep: true, idle_minutes: 15, restore_launch: true,
+        tray: false, autostart: false,
         last_running: true, last_model: models[0].id, last_at: now - 3600 },
       setup: { needs_llama_dir: false },
       ui: {},
@@ -2068,7 +2171,7 @@
       ],
       launch: [
         { key: 'ctx', label: '上下文长度', kind: 'enum', options: [['auto', '自动'], ['8', '8K'], ['16', '16K'], ['32', '32K'], ['64', '64K'], ['128', '128K'], ['256', '256K']], hint: '启动时一次性预留 KV 显存' },
-        { key: 'kv', label: 'KV 缓存精度', kind: 'enum', options: [['auto', '自动'], ['f16', 'f16'], ['q8_0', 'q8_0'], ['bf16', 'bf16']], hint: '自动：≥128K 用 q8_0，以下 f16' },
+        { key: 'kv', label: 'KV 缓存精度', kind: 'enum', options: [['auto', '自动'], ['f16', 'f16'], ['bf16', 'bf16'], ['q8_0', 'q8_0'], ['q5_1', 'q5_1'], ['q5_0', 'q5_0'], ['q4_1', 'q4_1'], ['iq4_nl', 'iq4_nl'], ['q4_0', 'q4_0'], ['f32', 'f32']], hint: '自动：≥128K 用 q8_0，以下 f16' },
         { key: 'ngl', label: 'GPU 层数', kind: 'int', lo: 0, hi: 1000, step: 1, hint: '999 = 全部' },
         { key: 'ot', label: '张量覆盖', kind: 'text', placeholder: '例如 exps=CPU', hint: '按张量名覆盖存放位置；留空 = 不覆盖' },
         { key: 'fa', label: 'Flash Attention', kind: 'enum', options: [['on', '开'], ['auto', '自动'], ['off', '关']], hint: '开启可省显存、加速长上下文' },
@@ -2105,7 +2208,7 @@
       'main: model loaded',
       'main: server is listening on 127.0.0.1:8080',
       'srv  update_slots: all slots are idle',
-    ].map(esc).join('\n');
+    ].join('\n');
   }
 
   /* ---------------- 启动 ---------------- */
