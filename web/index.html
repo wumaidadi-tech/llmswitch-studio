@@ -127,6 +127,7 @@
       <button data-tab="dashboard" class="on">概览</button>
       <button data-tab="models">模型</button>
       <button data-tab="runtime">运行</button>
+      <button data-tab="service">服务</button>
       <button data-tab="sampling">采样</button>
       <button data-tab="logs">日志</button>
       <span class="tab-ink" id="tabInk"></span>
@@ -203,21 +204,6 @@
             <div class="kv-table" id="envTable"></div>
           </div>
         </div>
-
-        <div class="card client-card">
-          <div class="card-h">
-            <div><h3>客户端接入</h3><p>OpenAI 兼容接口 · WorkBuddy / SDK / curl 都填这一组</p></div>
-            <button class="btn mini ghost" id="btnClientTest">测试连通</button>
-          </div>
-          <div class="client-rows" id="clientRows"></div>
-          <div class="client-actions">
-            <button class="btn mini ghost" data-copy="base">复制 Base URL</button>
-            <button class="btn mini ghost" data-copy="model">复制模型名</button>
-            <button class="btn mini ghost" data-copy="curl">复制 curl</button>
-            <button class="btn mini ghost" data-copy="py">复制 Python</button>
-            <span class="client-hint" id="clientHint">API Key 随便填（本地不校验）</span>
-          </div>
-        </div>
       </section>
 
       <!-- ---------- 模型 ---------- -->
@@ -233,6 +219,17 @@
           <div class="grow"><span>模型目录 </span><code id="modelsDir">—</code></div>
           <div><b id="modelsCount">0</b> 个 · <b id="modelsSize">0</b></div>
           <button class="btn mini ghost" id="btnOpenModels">打开目录</button>
+        </div>
+
+        <div class="card lora-card" id="loraCard">
+          <div class="card-h">
+            <div><h3>LoRA / 适配器</h3><p id="loraFor">只对当前模型生效；改完要保存并重启</p></div>
+            <div class="hdr-actions">
+              <button class="btn mini ghost" id="btnLoraScan">重新扫描</button>
+              <button class="btn mini ghost" id="btnLoraSave">已保存</button>
+            </div>
+          </div>
+          <div class="lora-list" id="loraList"></div>
         </div>
       </section>
 
@@ -263,7 +260,7 @@
               </div>
               <button class="btn ghost" id="llamaPortOpen">打开网页</button>
               <button class="btn primary" id="llamaPortApply">应用</button>
-              <span class="port-hint">仅监听 127.0.0.1 · 其它客户端要同步修改</span>
+              <span class="port-hint">仅监听 127.0.0.1 · 客户端怎么填见「服务」页</span>
             </div>
           </div>
           <div class="card span2">
@@ -284,39 +281,6 @@
               <div class="hint" id="budgetHint">—</div>
             </div>
           </div>
-          <div class="card span2" id="lifeCard">
-            <div class="card-h">
-              <div><h3>空闲与恢复</h3><p>空闲让 llama-server 自己睡，显存回到基线；下次请求自动唤醒</p></div>
-              <span class="tag" id="idleState">未启用</span>
-            </div>
-            <div class="life-rows">
-              <div class="life-row">
-                <label class="switch"><input type="checkbox" id="lcIdle"><span></span><i class="sw-txt">关闭</i></label>
-                <div class="life-txt"><b>空闲休眠</b>
-                  <span>利用 llama.cpp 原生的 --sleep-idle-seconds：休眠时释放显存，请求来了自动重新加载（首次多等几秒）。</span></div>
-                <div class="life-min">
-                  <span class="life-min-k">空闲</span>
-                  <div class="step"><button type="button" id="lcMinus" aria-label="减少">−</button>
-                    <input id="lcMinutes" type="number" min="1" max="720" step="1" inputmode="numeric">
-                    <button type="button" id="lcPlus" aria-label="增加">+</button></div>
-                  <span class="life-min-k">分钟</span>
-                </div>
-              </div>
-              <div class="life-row">
-                <label class="switch"><input type="checkbox" id="lcRestore"><span></span><i class="sw-txt">关闭</i></label>
-                <div class="life-txt"><b>启动时恢复上次状态</b>
-                  <span>上次退出时服务在运行，下次打开本程序会自动拉起同一个模型（加载期间界面显示启动中）。</span></div>
-                <span class="life-last" id="lcLast">—</span>
-              </div>
-            </div>
-          </div>
-          <div class="card span2" id="loraCard">
-            <div class="card-h">
-              <div><h3>LoRA / 适配器</h3><p>同目录或 models\loras\ 下的适配器；改完要保存并重启</p></div>
-              <button class="btn mini ghost" id="btnLoraScan">重新扫描</button>
-            </div>
-            <div class="lora-list" id="loraList"></div>
-          </div>
           <div class="card">
             <div class="card-h"><div><h3>上下文与卸载</h3><p>决定模型怎么放进显存</p></div></div>
             <div class="fields" id="fieldsCtx"></div>
@@ -328,6 +292,72 @@
           <div class="card span2">
             <div class="card-h"><div><h3>缓存、投机与接口</h3><p>进阶项；不确定就保持默认</p></div></div>
             <div class="fields" id="fieldsAdv"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- 服务 ---------- -->
+      <section class="view" data-view="service">
+        <div class="view-h">
+          <div><h2>服务</h2><p>客户端怎么连、空闲怎么省显存、适配器怎么挂、出问题怎么查</p></div>
+          <span class="tag" id="svcStage">未运行</span>
+        </div>
+
+        <div class="grid service">
+          <div class="card client-card">
+            <div class="card-h">
+              <div><h3>客户端接入</h3><p>OpenAI 兼容 · WorkBuddy / SDK / curl 都填这一组</p></div>
+              <button class="btn mini ghost" id="btnClientTest">测试连通</button>
+            </div>
+            <div class="client-rows" id="clientRows"></div>
+            <div class="client-actions">
+              <button class="btn mini ghost" data-copy="base">复制 Base URL</button>
+              <button class="btn mini ghost" data-copy="model">复制模型名</button>
+              <button class="btn mini ghost" data-copy="curl">复制 curl</button>
+              <button class="btn mini ghost" data-copy="py">复制 Python</button>
+            </div>
+            <div class="client-hint" id="clientHint">API Key 随便填（本地不校验）· 服务没启动时连不上</div>
+            <pre class="client-code" id="clientCode"></pre>
+          </div>
+
+          <div class="card" id="lifeCard">
+            <div class="card-h">
+              <div><h3>空闲与恢复</h3><p>空闲让模型自己睡，显存回到基线；下次请求自动醒来</p></div>
+              <span class="tag" id="idleState">未启用</span>
+            </div>
+            <div class="life-rows">
+              <div class="life-row">
+                <div class="life-head">
+                  <label class="switch" title="开启/关闭空闲休眠"><input type="checkbox" id="lcIdle"><span></span></label>
+                  <b>空闲休眠</b>
+                  <div class="life-min">
+                    <span class="life-min-k">空闲</span>
+                    <div class="step"><button type="button" id="lcMinus" aria-label="减少">−</button>
+                      <input id="lcMinutes" type="number" min="1" max="720" step="1" inputmode="numeric">
+                      <button type="button" id="lcPlus" aria-label="增加">+</button></div>
+                    <span class="life-min-k">分钟</span>
+                  </div>
+                </div>
+                <p class="life-desc">用 llama.cpp 原生 --sleep-idle-seconds：休眠时释放显存，请求来了自动重新加载（首次多等几秒）。</p>
+              </div>
+              <div class="life-row">
+                <div class="life-head">
+                  <label class="switch" title="开启/关闭自动恢复"><input type="checkbox" id="lcRestore"><span></span></label>
+                  <b>启动时恢复上次状态</b>
+                  <span class="life-last" id="lcLast">—</span>
+                </div>
+                <p class="life-desc">上次退出时服务在运行，下次打开本程序会自动拉起同一个模型（加载期间界面显示启动中）。</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="card span2">
+            <div class="card-h"><div><h3>几个容易踩的点</h3><p>下面这些行为是刻意的，不是 bug</p></div></div>
+            <ul class="notes">
+              <li><b>休眠 ≠ 停止。</b>休眠时进程还在、<code>/health</code> 仍返回 ok，只是权重退出显存；下一个请求会自动重载，首包多等十几秒。</li>
+              <li><b>想彻底释放内存</b>就点「停止」。外部脚本想按需拉起：<code>GET /wake?t=&lt;token&gt;</code>，token 在 <code>LLMSwitchData/runtime.json</code>。</li>
+              <li><b>实际入睡比设定晚约 30 秒。</b>空闲计时由 llama.cpp 管，而 <code>/slots</code> 会重置它，所以本程序只在有请求或刚活跃时才去问。</li>
+            </ul>
           </div>
         </div>
       </section>
@@ -356,14 +386,31 @@
       <!-- ---------- 日志 ---------- -->
       <section class="view" data-view="logs">
         <div class="view-h">
-          <div><h2>日志</h2><p>llama-server 的 --log-file 尾部</p></div>
+          <div><h2>日志</h2><p>llama-server 的 --log-file 尾部 · 起不来时先看下面的诊断</p></div>
           <div class="hdr-actions">
             <label class="switch"><input type="checkbox" id="logAuto" checked><span></span>自动刷新</label>
-            <button class="btn ghost" id="btnDiag">诊断</button>
             <button class="btn ghost" id="btnOpenLog">用记事本打开</button>
             <button class="btn ghost" id="btnCopyLog">复制</button>
           </div>
         </div>
+
+        <div class="card diag-card" id="diagCard">
+          <div class="card-h">
+            <div><h3>启动诊断</h3><p>只读：日志证据 + 配置风险 + 具体改法</p></div>
+            <div class="hdr-actions">
+              <button class="btn mini ghost" id="diagToggle" hidden>收起</button>
+              <button class="btn mini ghost" id="diagCopy">复制</button>
+              <button class="btn mini ghost" id="diagRestart">保存并重启</button>
+              <button class="btn mini primary" id="btnDiagRun">开始诊断</button>
+            </div>
+          </div>
+          <div class="diag-sum" id="diagSum">还没诊断。点「开始诊断」；启动失败或显存预警时，概览页的提示条会直接带你到这里。</div>
+          <div id="diagBody" hidden>
+            <div class="diag-list" id="diagList"></div>
+            <pre class="diag-ev" id="diagEv" hidden></pre>
+          </div>
+        </div>
+
         <pre class="logbox" id="logBox">（暂无日志）</pre>
       </section>
     </div>
@@ -462,21 +509,6 @@
     <div class="modal-f">
       <button class="btn ghost" data-close="updateModal">关闭</button>
       <button class="btn primary" id="updateOpen" hidden>打开发布页</button>
-    </div>
-  </div>
-</div>
-
-<div class="modal" id="diagModal" hidden>
-  <div class="modal-card diag-card">
-    <div class="modal-h"><h3>启动诊断</h3>
-      <button class="btn icon ghost" data-close="diagModal">✕</button></div>
-    <div class="diag-sum" id="diagSum">—</div>
-    <div class="diag-list" id="diagList"></div>
-    <pre class="diag-ev" id="diagEv" hidden></pre>
-    <div class="modal-f">
-      <button class="btn ghost" data-close="diagModal">关闭</button>
-      <button class="btn ghost" id="diagCopy">复制诊断</button>
-      <button class="btn primary" id="diagRestart">保存并重启</button>
     </div>
   </div>
 </div>

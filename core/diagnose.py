@@ -73,7 +73,8 @@ _RE_SKIP = re.compile(r"(no error|0 errors|ignoring|deprecated)", re.I)
 
 def _port_busy(port):
     s = socket.socket()
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    # ⚠️ 不要开 SO_REUSEADDR：Windows 上它允许"抢占"已占用的端口，
+    # bind 会成功，于是永远报"端口空闲"。
     try:
         s.bind((paths.HOST, int(port)))
         return False

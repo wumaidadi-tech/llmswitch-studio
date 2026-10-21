@@ -296,10 +296,15 @@ def _is_sidecar(low):
 _LORA_RE = re.compile(r"(^|[-_.])(lora|lycoris|dora|adapter)s?([-_.]|$)", re.I)
 
 
-def is_lora_file(fn):
+def is_lora_file(fn, size=0):
     low = (fn or "").lower()
-    return low.endswith((".gguf", ".bin")) and bool(
-        _LORA_RE.search(low) or low.startswith(("lora-", "lora_")))
+    if not low.endswith((".gguf", ".bin")):
+        return False
+    if size and size > (4 << 30):
+        # 4GB 以上基本是"合并了 LoRA 的整模型"，不是适配器；
+        # 光看文件名会把它从模型库里扫丢。
+        return False
+    return bool(_LORA_RE.search(low) or low.startswith(("lora-", "lora_")))
 
 
 def _lora_item(full):

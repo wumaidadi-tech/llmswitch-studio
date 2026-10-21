@@ -27,6 +27,7 @@
   let hudPopOpen = false;
   let undoStack = [];          // 启动参数的回退栈（只存本地草稿，不落盘）
   let restoreDismissed = false;
+  let lastDiag = null;         // 最近一次诊断结果（复制用）
 
   if (MINI) {
     document.body.classList.add('mini');
@@ -97,9 +98,10 @@
     if (MINI) { renderHud(); return; }     // 悬浮窗只有三行，别去算隐藏的图表
     renderTop();
     renderSide();
-    if (tab === 'dashboard') { renderStats(); renderTables(); renderClient(); drawMainChart(); }
-    if (tab === 'models') renderModelGrid();
-    if (tab === 'runtime') { renderRuntime(); renderBudget(); renderLifecycle(); renderLoras(); }
+    if (tab === 'dashboard') { renderStats(); renderTables(); drawMainChart(); }
+    if (tab === 'models') { buildForms(); renderModelGrid(); renderLoras(); }
+    if (tab === 'runtime') { renderRuntime(); renderBudget(); }
+    if (tab === 'service') { buildForms(); renderService(); }
     if (tab === 'sampling') renderSampling();
   }
 
@@ -756,6 +758,20 @@
     }
   }
 
+  /* ---------------- 服务页：接入 / 空闲 / LoRA / 诊断 ---------------- */
+  function renderService() {
+    if (!$('#clientRows')) return;
+    const st = S.status.stage;
+    const tag = $('#svcStage');
+    if (tag) {
+      tag.textContent = S.live.sleeping ? '休眠中' : stageText(st);
+      tag.className = 'tag' + ((st === 'running' || st === 'starting') ? ' run' : '');
+    }
+    renderClient();
+    renderLifecycle();
+    renderLoras();
+  }
+
   /* ---------------- 客户端接入 ---------------- */
   function clientSnippets() {
     const c = S.client || {};
@@ -792,6 +808,8 @@
       '<div class="client-row"><span class="ck">' + k + '</span>'
       + '<span class="cv" title="' + esc(v) + '">' + esc(v) + '</span></div>').join('');
     if (box.dataset.sig !== html) { box.innerHTML = html; box.dataset.sig = html; }
+    const code = $('#clientCode');
+    if (code && code.textContent !== c.curl) code.textContent = c.curl;
     const hint = $('#clientHint');
     if (hint && !hint.dataset.locked) {
       hint.textContent = 'API Key 随便填（本地不校验）· 服务没启动时连不上';
@@ -879,9 +897,26 @@
     return String(p || '').split(/[\\/]/).pop();
   }
 
+  function updateLoraSave() {
+    const b = $('#btnLoraSave');
+    if (!b || !S) return;
+    const dirty = JSON.stringify(draft.launch.loras || [])
+      !== JSON.stringify(((S.cfg || {}).launch || {}).loras || []);
+    const run = ['running', 'starting'].includes(S.status.stage);
+    b.textContent = dirty ? (run ? '保存并重启' : '保存') : '已保存';
+    b.classList.toggle('primary', dirty);
+  }
+
   function renderLoras() {
     const box = $('#loraList');
     if (!box || !S) return;
+    const forEl = $('#loraFor');
+    if (forEl) {
+      forEl.textContent = S.current
+        ? '只对「' + midName(S.current.label, 30) + '」生效；适配器放在模型同目录或 models\\loras\\'
+        : '没有选中的模型';
+    }
+    updateLoraSave();
     const detected = (S.current && S.current.loras) || [];
     const conf = draft.launch.loras || [];
     const map = {};
@@ -941,24 +976,27 @@
   }
 
   function showDiag(d) {
+    lastDiag = d;
     $('#diagSum').textContent = d.summary || '—';
     const items = d.items || [];
-    $('#diagList').innerHTML = items.length ? items.map((it) =>
+    // 没有条目时保持为空（CSS :empty 会隐藏），结论已经在 summary 里，别重复一遍
+    $('#diagList').innerHTML = items.map((it) =>
       '<div class="diag-item ' + esc(it.level || 'info') + '"><b>' + esc(it.title) + '</b>'
       + (it.detail ? '<div class="dt">' + esc(it.detail) + '</div>' : '')
       + ((it.fix || []).length ? '<ul>' + it.fix.map((f) => '<li>' + esc(f) + '</li>').join('') + '</ul>' : '')
-      + '</div>').join('')
-      : '<div class="lora-empty">没有发现问题：日志里没有 OOM、参数被拒、端口占用的痕迹。</div>';
+      + '</div>').join('');
     const ev = d.evidence || [];
     const box = $('#diagEv');
     box.hidden = !ev.length;
     box.textContent = ev.join('\n');
-    const m = $('#diagModal');
-    m.hidden = false;
-    m.dataset.text = diagText(d);
+    $('#diagBody').hidden = false;
+    const t = $('#diagToggle');
+    t.hidden = false;
+    t.textContent = '收起';
   }
 
-  async function runDiag() {
+  async function runDiag(goTab) {
+    if (goTab) setTab('logs');
     if (DEMO) {
       showDiag({ summary: '演示数据：发现 1 个风险。', evidence: ['demo: cuda out of memory'],
         items: [{ level: 'warn', title: '预计显存不够（配置层面）',
@@ -966,9 +1004,12 @@
           fix: ['把上下文降到 64K', 'KV 改 q8_0', '关掉其它占显存的程序'] }] });
       return;
     }
+    const sum = $('#diagSum');
+    if (sum) sum.textContent = '正在读取日志与配置…';
     try {
       showDiag(await api('/api/diagnose'));
     } catch (e) {
+      if (sum) sum.textContent = '诊断失败：' + e.message;
       toast('诊断失败：' + e.message, 'err');
     }
   }
@@ -1081,6 +1122,7 @@
     bs.textContent = cs ? '保存修改' : '已保存';
     bs.classList.toggle('primary', cs);
     refreshUndo();
+    updateLoraSave();
   }
 
   async function save(ns, restart) {
@@ -1433,6 +1475,7 @@
         toast('已重新扫描适配器', 'ok');
       } catch (e) { toast('扫描失败：' + e.message, 'err'); }
     });
+    $('#btnLoraSave').addEventListener('click', () => save('launch', true));
 
     /* 客户端接入 */
     const cc = $('#clientRows');
@@ -1452,13 +1495,19 @@
     $('#btnClientTest').addEventListener('click', testClient);
 
     /* 诊断 / 恢复 */
-    $('#btnDiag').addEventListener('click', runDiag);
-    $('#warnDiag').addEventListener('click', runDiag);
+    $('#warnDiag').addEventListener('click', () => runDiag(true));
+    $('#btnDiagRun').addEventListener('click', () => runDiag(false));
+    $('#diagToggle').addEventListener('click', () => {
+      const body = $('#diagBody');
+      body.hidden = !body.hidden;
+      $('#diagToggle').textContent = body.hidden ? '展开' : '收起';
+    });
     $('#diagCopy').addEventListener('click', () => {
-      copy($('#diagModal').dataset.text || '');
+      if (!lastDiag) { toast('还没有诊断结果', 'err'); return; }
+      copy(diagText(lastDiag));
       toast('已复制诊断结果', 'ok');
     });
-    $('#diagRestart').addEventListener('click', () => { $('#diagModal').hidden = true; save('launch', true); });
+    $('#diagRestart').addEventListener('click', () => save('launch', true));
     $('#restoreStart').addEventListener('click', () => {
       const lc = S.lifecycle || {};
       serverAction('start', lc.last_model || (S.current && S.current.id));
@@ -1906,7 +1955,7 @@
     $$('.view').forEach((v) => v.classList.toggle('on', v.dataset.view === name));
     moveInk();
     if (name === 'logs') loadLogs();
-    if (name === 'sampling' || name === 'runtime') buildForms();
+    if (name === 'sampling' || name === 'runtime' || name === 'service' || name === 'models') buildForms();
     if (S) render();
   }
 

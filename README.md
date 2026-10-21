@@ -46,13 +46,13 @@ Everything is local. No telemetry, no account, no cloud.
   reloads it automatically, so clients need no changes. The toggle needs a restart to take effect.
 - **Restore last session** — if the server was running when you quit, the next launch starts the same
   model again. Turn it off and the dashboard offers a one-click "start it again?" banner instead.
-- **LoRA / adapters** — detects `lora-*.gguf` / `*.bin` next to the model and under `models\loras\`,
+- **LoRA / adapters** — on the Models page, detects `lora-*.gguf` / `*.bin` next to the model and under `models\loras\`,
   with a per-adapter switch and scale (`--lora` / `--lora-scaled`). Adapters are no longer listed as models.
-- **Client card** — the dashboard shows base URL, model name and API key, copies curl / Python
+- **Client card** — the Service page shows base URL, model name and API key (with a curl preview), copies curl / Python
   snippets, and can hit `/v1/models` to verify the endpoint.
-- **Startup diagnostics** — turns the log tail plus the current config into a cause and concrete fixes
-  (OOM, rejected flag, port in use, broken LoRA, KV over budget…), reachable from the log page and the
-  failure strip, copyable in one click.
+- **Startup diagnostics** — at the top of the Logs page (collapsible), turns the log tail plus the
+  current config into a cause and concrete fixes (OOM, rejected flag, port in use, broken LoRA,
+  KV over budget…). The dashboard failure strip jumps straight there, and results copy in one click.
 - **Undo** — "auto-pick", "load preset" and LoRA edits push a local draft snapshot first; **Undo** steps
   back without writing anything to disk.
 - **Update check** — menu → Check for updates compares your version with the latest GitHub release.
@@ -60,13 +60,21 @@ Everything is local. No telemetry, no account, no cloud.
 - **Export** — copy the exact command line that was used, or export JSON / `.bat` / `.sh`.
 - **Local API** — every action is a JSON call on `127.0.0.1` with a random per-session token.
 
-| Models | Runtime |
+| Dashboard | Models |
 |---|---|
-| ![Models](docs/shot-models.png) | ![Runtime](docs/shot-runtime.png) |
+| ![Dashboard](docs/shot-dashboard.png) | ![Models](docs/shot-models.png) |
 
-| Sampling | Floating window |
+| Runtime | Service |
 |---|---|
-| ![Sampling](docs/shot-sampling.png) | ![Mini](docs/shot-mini.png) |
+| ![Runtime](docs/shot-runtime.png) | ![Service](docs/shot-service.png) |
+
+| Sampling | Logs |
+|---|---|
+| ![Sampling](docs/shot-sampling.png) | ![Logs](docs/shot-logs.png) |
+
+| Floating window | |
+|---|---|
+| ![Mini](docs/shot-mini.png) | |
 
 ## Requirements
 
