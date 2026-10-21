@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import config, gguf, monitor, paths, server
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 
 _live = {                       # 探测层最近一次读数（拿不到时保留旧值）
     "health": "down",

@@ -24,6 +24,7 @@
   let tab = 'dashboard';
   let activePreset = 'gen';
   let openSel = null;
+  let hudPopOpen = false;
 
   if (MINI) {
     document.body.classList.add('mini');
@@ -84,6 +85,7 @@
 
   function render() {
     renderStatus();
+    if (MINI) { renderHud(); return; }     // 悬浮窗只有三行，别去算隐藏的图表
     renderTop();
     renderSide();
     if (tab === 'dashboard') { renderStats(); renderTables(); drawMainChart(); }
@@ -115,11 +117,6 @@
       : '<path d="M8 5.5v13l11-6.5z"/>';
     btn.classList.toggle('danger', running);
     $('#btnRestart').disabled = (st === 'stopped');
-    const mt = $('#btnMiniToggle');
-    if (mt) {
-      mt.textContent = running ? '停止' : '启动';
-      mt.classList.toggle('danger', running);
-    }
 
     $('#pillStage').querySelector('span').textContent = stageText(st);
     $('#tbTps').textContent = S.live.tps ? S.live.tps.toFixed(1) : '—';
@@ -168,36 +165,48 @@
     fp.textContent = S.paths.llama_port || S.paths.port;
     fp.title = 'llama-server: ' + (S.paths.llama_port || '') + ' · 控制台: ' + S.paths.port;
     $('#modelCount').textContent = S.models.length;
-    if (MINI) {
-      $('#miniModel').hidden = false;
-      $('#miniModelName').textContent = c ? midName(c.label, 28) : '没有模型';
-      $('#miniModel').title = (c ? c.label : '') + (S.status.pid ? ' · PID ' + S.status.pid : '');
-      const mg = $('#miniGrid');
-      const capK = Math.round((S.live.ctx_cap || 0) / 1024);
-      const usedK = Math.round((S.live.ctx_used || 0) / 1024);
-      const lc = S.cfg.launch || {};
-      if (mg) {
-        // 四宫格：速度 / 上下文+进度条 / 显存 / 剩余（配置用标签，不重复 128K）
-        $('#mgTps').textContent = (S.live.tps || 0).toFixed(1);
-        $('#mgCtx').textContent = usedK || '0';
-        $('#mgCtxCap').textContent = capK ? '/ ' + capK + 'K' : '/ —';
-        const bar = $('#mgBar');
-        const pct = capK ? clamp(usedK / capK * 100, 0, 100) : 0;
-        bar.style.width = pct + '%';
-        bar.classList.toggle('hot', pct > 85);
-        const gpu = S.live.gpu || {};
-        $('#mgVram').textContent = gpu.total
-          ? (((gpu.used || 0) / 1024).toFixed(1) + ' / ' + (gpu.total / 1024).toFixed(1))
-          : '—';
-        $('#mgLeft').textContent = capK ? Math.max(0, capK - usedK) + 'K' : '—';
-        const tags = [];
-        if (S.status.kv) tags.push(S.status.kv);
-        if (lc.spec === 'draft-mtp') tags.push('MTP');
-        if (lc.mmproj && c && c.has_mmproj) tags.push('视觉');
-        $('#mgTags').innerHTML = tags.map((t) => '<span>' + esc(t) + '</span>').join('');
-      }
-    }
     $('#verTag').textContent = 'v' + S.version;
+  }
+
+  /* 悬浮窗：状态 / 模型 / 上下文三行，和主界面共用同一份 snapshot */
+  function renderHud() {
+    const st = S.status.stage;
+    const running = st === 'running' || st === 'starting';
+    const run = $('#hudRun');
+    run.classList.toggle('on', running);
+    run.classList.toggle('busy', st === 'starting' || st === 'stopping');
+    run.title = running ? '停止' : (st === 'error' ? '重试' : '启动');
+    $('#hudStage').textContent = stageText(st);
+    $('#hudStage').title = st === 'error' ? (S.status.error || '') : '';
+    $('#hudTps').textContent = S.live.tps ? S.live.tps.toFixed(1) : '0.0';
+
+    const gpu = S.live.gpu || {};
+    const gb = (n) => (n / 1024).toFixed(1);
+    $('#hudVram').textContent = gpu.total ? gb(gpu.used || 0) + '/' + gb(gpu.total) + 'G' : '—';
+    $('#hudVram').title = gpu.total
+      ? '显存 ' + gb(gpu.used || 0) + ' / ' + gb(gpu.total) + ' GB' : '未检测到 NVIDIA 显卡';
+
+    const c = S.current;
+    $('#hudModelName').textContent = c ? midName(c.label, 18) : '没有模型';
+    $('#hudModel').title = c ? c.label + ' · 点击切换模型' : '没有模型';
+    const lc = (S.cfg && S.cfg.launch) || {};
+    const tags = [];
+    if (S.status.kv) tags.push(S.status.kv);
+    if (lc.spec === 'draft-mtp') tags.push('MTP');
+    if (lc.mmproj && c && c.has_mmproj) tags.push('视觉');
+    $('#hudTags').innerHTML = tags.slice(0, 3).map((t) => '<span>' + esc(t) + '</span>').join('');
+
+    // 未启动时 /slots 没有容量，退回配置里的上下文（单位 K）
+    let capK = Math.round((S.live.ctx_cap || 0) / 1024);
+    if (!capK) capK = parseInt(lc.ctx, 10) || 0;
+    const usedK = Math.round((S.live.ctx_used || 0) / 1024);
+    $('#hudCtx').textContent = usedK;
+    $('#hudCap').textContent = capK ? '/ ' + capK + 'K' : '/ —';
+    $('#hudLeft').textContent = capK ? Math.max(0, capK - usedK) + 'K' : '—';
+    const pct = capK ? clamp(usedK / capK * 100, 0, 100) : 0;
+    const bar = $('#hudBar');
+    bar.style.width = pct + '%';
+    bar.classList.toggle('hot', pct > 85);
   }
 
   function renderSide() {
@@ -905,16 +914,30 @@
       }
     });
 
-    const mmBtn = $('#miniModel');
-    if (mmBtn) mmBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openMiniModels(); });
+    const mmBtn = $('#hudModel');
+    if (mmBtn) {
+      mmBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openHudModels(); });
+    }
+    const pop = $('#hudPop');
+    if (pop) {
+      pop.addEventListener('click', (ev) => {
+        const it = ev.target.closest('.hud-item');
+        if (!it) return;
+        ev.stopPropagation();
+        const id = it.dataset.mid;
+        closeHudModels();
+        const m = S && S.models.find((x) => x.id === id);
+        if (S && ['running', 'starting'].includes(S.status.stage) && !DEMO) {
+          toast('正在切换到 ' + (m ? midName(m.label, 20) : '新模型') + '…', 'ok');
+        }
+        selectModel(id, true);
+      });
+    }
     document.addEventListener('click', (ev) => {
-      const o = ev.target.closest('#miniModel, .sel-pop');
-      if (!o) closeMiniPop();
-      const opt = ev.target.closest('[data-mid]');
-      if (opt && miniPop) {
-        closeMiniPop();
-        selectModel(opt.dataset.mid, true);
-      }
+      if (hudPopOpen && !ev.target.closest('#hudPop, #hudModel')) closeHudModels();
+    });
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape' && hudPopOpen) closeHudModels();
     });
 
     $$('.win-ctrls button').forEach((b) => {
@@ -1177,6 +1200,35 @@
     api('/api/window', { json: { action: action, mini: MINI } }).catch(() => {});
   }
 
+  /* 悬浮窗的模型列表：就地弹出，点选即切换（运行中会自动 swap） */
+  function openHudModels() {
+    const pop = $('#hudPop');
+    if (!pop) return;
+    if (hudPopOpen) { closeHudModels(); return; }
+    if (!S || !S.models.length) { toast('没有检测到模型', 'err'); return; }
+    pop.innerHTML = S.models.map((m) => {
+      const cls = ['hud-item'];
+      if (m.selected) cls.push('sel');
+      if (m.running) cls.push('running');
+      // 「混合」对分辨两个模型没有帮助，这种情况改显示体积
+      const meta = (m.quant && m.quant !== '混合') ? m.quant : fmtGB(m.size || 0);
+      return '<button class="' + cls.join(' ') + '" data-mid="' + esc(m.id) + '" title="' + esc(m.label) + '">'
+        + '<i class="hi-dot"></i>'
+        + '<span class="hi-name">' + esc(midName(m.label, 16)) + '</span>'
+        + '<span class="hi-q">' + esc(meta) + '</span></button>';
+    }).join('');
+    pop.hidden = false;
+    hudPopOpen = true;
+    const cur = pop.querySelector('.hud-item.sel') || pop.querySelector('.hud-item.running');
+    if (cur) cur.scrollIntoView({ block: 'nearest' });
+  }
+
+  function closeHudModels() {
+    const pop = $('#hudPop');
+    if (pop) pop.hidden = true;
+    hudPopOpen = false;
+  }
+
   /* 表单事件：滑块 / 步进 / 文本 / 开关 */
   function onInput(ev) {
     const el = ev.target;
@@ -1395,7 +1447,7 @@
       repeat_n: '256', dry_mult: '0.8', dry_base: '1.75', dry_len: '2', dry_n: '512', xtc_prob: '0',
       xtc_thresh: '0.1', typical_p: '1', budget: '512', seed: '-1', sampler_order: 'rec', sty: 'gen' };
     return {
-      ok: true, version: '2.0.0', ts: now,
+      ok: true, version: '2.1.0', ts: now,
       status: { stage: 'running', pid: 21488, model: models[0].id, ctx: '128K', kv: 'q8_0',
         started_at: now - 640, ready_at: now - 615, stage_at: now - 640, error: '', warmup_ms: 23800, cmd: [],
         cmdline: 'llama-server.exe -m models\\big\\Qwen3-35B-A3B-Q6_K.gguf --mmproj ... -c 131072 -ngl 999 -ot exps=CPU -fa on -fit off -t 16 -b 2048 -ub 512 --cache-type-k q8_0 --cache-type-v q8_0 --cache-ram 8192 --spec-type draft-mtp --spec-draft-n-max 2 --reasoning on --reasoning-budget 512 --temp 0.7 --top-p 0.95 --top-k 20 --min-p 0.05 --presence-penalty 0.5 --repeat-penalty 1.08 --repeat-last-n 256 --dry-multiplier 0.8 --dry-base 1.75 --dry-allowed-length 2 --dry-penalty-last-n 512 --jinja --host 127.0.0.1 --port 8080 --metrics' },
@@ -1483,13 +1535,15 @@
   function boot() {
     bind();
     if (MINI) {
-      const bar = document.createElement('div');
-      bar.className = 'mini-actions';
-      bar.innerHTML = '<button class="btn primary" id="btnMiniToggle">启动</button>'
-        + '<button class="btn ghost" id="btnExpand">展开</button>';
-      $('.main').appendChild(bar);
-      $('#btnMiniToggle').addEventListener('click', toggleRun);
-      $('#btnExpand').addEventListener('click', expandWindow);
+      // 悬浮窗：整窗可拖；启动/停止在左侧圆钮，展开/关闭在右上角。
+      $('#hud').hidden = false;
+      $('#hudRun').addEventListener('click', toggleRun);
+      $('#hudExpand').addEventListener('click', expandWindow);
+      $('#hudClose').addEventListener('click', () => winCtl('close'));
+      $('#hud').addEventListener('mousedown', (ev) => {
+        if (ev.button !== 0 || ev.target.closest('button, .hud-pop')) return;
+        setTimeout(() => { if (!ev.defaultPrevented) winCtl('drag'); }, 0);
+      });
     }
     const qt = qs.get('tab');
     if (qt && !MINI) setTab(qt); else moveInk();

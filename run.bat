@@ -30,17 +30,30 @@ call :probe "%ProgramFiles%\Python312\python.exe"
 call :probe "E:/ComfyUI-aki-v3.2/python/python.exe"
 call :probe "python"
 
-REM A second pass: prefer an interpreter that has pywebview installed.
-REM pywebview (WebView2) is what removes the black title bar; without it
-REM the app still runs, but falls back to Edge --app (29px Chromium bar).
+REM Prefer an interpreter that has pywebview installed: it is what removes
+REM the black title bar (WebView2 host). If the first usable Python lacks it,
+REM rescan the candidates and switch. With no pywebview at all, keep the
+REM original interpreter -- the app then falls back to Edge --app.
+set "PYWV="
 if defined PY (
   %PY% -c "import webview" >nul 2>&1 && set "PYWV=1"
 )
 
 if not defined PYWV (
-  for /f "delims=" %%P in ('where python 2^>nul') do call :probe_wv "%%P"
+  set "PY0=!PY!"
+  set "PY="
+  for /f "delims=" %%P in ('where python 2^>nul') do call :probe_wv_file "%%P"
+  if not defined PY call :probe_wv "py -3"
+  if not defined PY call :probe_wv "D:/dev/python/python.exe"
+  if not defined PY call :probe_wv "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+  if not defined PY call :probe_wv "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+  if not defined PY call :probe_wv "%ProgramFiles%\Python313\python.exe"
+  if not defined PY call :probe_wv "E:/ComfyUI-aki-v3.2/python/python.exe"
+  REM virtualenvs kept next to the project, and the Python bundled with WorkBuddy/Qoder
+  if not defined PY call :probe_wv "%~dp0.venv\Scripts\python.exe"
+  if not defined PY call :probe_wv "%USERPROFILE%\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
+  if not defined PY set "PY=!PY0!"
 )
-if not defined PYWV call :probe_wv "D:/dev/python/python.exe"
 
 if not defined PY (
   echo [ERROR] No usable Python 3.8+ found.
@@ -66,9 +79,16 @@ if /i "%~1"=="--check" (
   exit /b 0
 )
 
-REM No third-party packages needed: backend is stdlib only,
-REM the UI runs in Edge (Chromium) via --app mode.
+REM Backend is stdlib only. pywebview is optional but recommended: it gives
+REM a genuinely frameless window (WebView2). Without it the UI still runs in
+REM Edge --app mode.
 start "" %PY% "%~dp0app.py" %*
+exit /b 0
+
+:probe_wv_file
+REM arg 1 = a full path from "where"; skip Store aliases
+echo %~1 | findstr /i /c:"WindowsApps" >nul && exit /b 0
+call :probe_wv "%~1"
 exit /b 0
 
 :probe_wv

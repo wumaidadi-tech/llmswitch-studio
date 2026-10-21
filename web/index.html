@@ -89,11 +89,6 @@
           <span id="vramTxt">— / —</span>
         </div>
       </div>
-      <button class="mini-model" id="miniModel" hidden>
-        <i class="mini-dot"></i>
-        <span id="miniModelName">—</span>
-        <svg viewBox="0 0 12 12"><path d="M2 4l4 4 4-4"/></svg>
-      </button>
       <div class="win-ctrls no-drag">
         <button data-win="min" title="最小化"><svg viewBox="0 0 12 12"><path d="M2.5 6h7"/></svg></button>
         <button data-win="max" title="最大化 / 还原"><svg viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" rx="1"/></svg></button>
@@ -124,25 +119,6 @@
           <span id="warnText"></span>
         </div>
 
-        <div class="mini-grid" id="miniGrid">
-          <div class="mtile span2">
-            <div class="mrow">
-              <span class="mlabel">上下文</span>
-              <span class="mtags" id="mgTags"></span>
-              <span class="mrest">剩余 <b id="mgLeft">—</b></span>
-            </div>
-            <div class="mval"><b id="mgCtx">—</b><em id="mgCtxCap">/ —</em></div>
-            <div class="meter"><i id="mgBar"></i></div>
-          </div>
-          <div class="mtile">
-            <span class="mlabel">解码速度</span>
-            <div class="mval"><b id="mgTps">—</b><em>tok/s</em></div>
-          </div>
-          <div class="mtile">
-            <span class="mlabel">显存</span>
-            <div class="mval"><b id="mgVram">—</b><em>GB</em></div>
-          </div>
-        </div>
         <div class="grid stats">
           <div class="card stat">
             <div class="stat-h"><span>解码速度</span><svg viewBox="0 0 24 24" class="i"><path d="M3 17l5-6 4 3 4-7 5 5"/></svg></div>
@@ -289,6 +265,44 @@
       </section>
     </div>
   </main>
+</div>
+
+<!-- ============ 悬浮窗（?mini=1） ============
+     只占 320×112：一行状态 + 一行模型 + 一行上下文。
+     启动/停止是左侧那个 22px 圆钮，展开是右上角图标 —— 它们不是常用操作，
+     不占整行按钮。模型行点击就地弹出列表，选完即切换。 -->
+<div class="hud" id="hud" hidden>
+  <div class="hud-top" id="hudTop">
+    <button class="hud-run" id="hudRun" title="启动">
+      <svg class="ic-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg>
+      <svg class="ic-stop" viewBox="0 0 24 24"><rect x="7" y="5" width="10" height="14" rx="2.2"/></svg>
+    </button>
+    <div class="hud-state">
+      <b id="hudStage">已停止</b>
+      <span class="hud-tps"><b id="hudTps">0.0</b> tok/s</span>
+    </div>
+    <span class="hud-vram" id="hudVram">—</span>
+    <button class="hud-ic" id="hudExpand" title="展开主界面">
+      <svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-7 7"/><path d="M10 20H4v-6M4 20l7-7"/></svg>
+    </button>
+    <button class="hud-ic" id="hudClose" title="关闭悬浮窗">
+      <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <button class="hud-model" id="hudModel" title="切换模型">
+    <span class="hud-name" id="hudModelName">—</span>
+    <svg class="hud-caret" viewBox="0 0 12 12"><path d="M2 4l4 4 4-4"/></svg>
+  </button>
+  <div class="hud-ctx">
+    <div class="hud-ctx-row">
+      <span class="hud-k">上下文</span>
+      <b><span id="hudCtx">0</span> <em id="hudCap">/ —</em></b>
+      <span class="hud-tags" id="hudTags"></span>
+      <span class="hud-rest">剩 <b id="hudLeft">—</b></span>
+    </div>
+    <div class="meter"><i id="hudBar"></i></div>
+  </div>
+  <div class="hud-pop" id="hudPop" hidden></div>
 </div>
 
 <div class="toasts" id="toasts"></div>

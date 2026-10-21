@@ -33,7 +33,8 @@
   `--no-kv-offload`、`--moe-cache-mib`、投机解码、KV 精度——全部可改，旁边就是显存预算条。
 - **采样参数**：18 项，滑条 + 步进器；内置四档风格（通用 / 代码 / 写提示词 / 严谨）；
   支持**另存为预设**，把自己调好的一整套参数存下来复用。
-- **悬浮窗**：400×244 的置顶小窗，和主窗口共用同一个后端，主窗口挡视线时用它。
+- **悬浮窗**：320×112 的置顶小窗：状态、tok/s、显存、上下文进度条，点模型行就地切换。
+  启动/停止是左侧小圆钮，展开和关闭是右上角图标，平时不占地方。
 - **日志**：`llama-server` 输出尾部实时刷新，错误行高亮。
 - **导出**：复制当前实际使用的命令行，或导出 JSON / `.bat` / `.sh`。
 - **本地 API**：所有动作都是 `127.0.0.1` 上的 JSON 调用，带一次性随机 token。
@@ -49,7 +50,9 @@
 ## 环境要求
 
 - **Windows 10 / 11（x64）**
-- **Microsoft Edge**（Win11 自带）：界面由 Edge 以 `--app` 模式渲染，
+- **Microsoft Edge WebView2 运行时**：Win11 与大多数更新过的 Win10 自带。没有时请安装
+  [常青版运行时](https://developer.microsoft.com/microsoft-edge/webview2/)；装不上或缺失时，
+  程序会退回 Edge `--app` 窗口，页面顶部会多出约 29px 的浏览器栏。
   折射效果依赖 Chromium 的 `backdrop-filter: url()`。
 - **一份带 `llama-server.exe` 的 llama.cpp**，模型放在它旁边的 `models/` 里。
 - Python 3.8+ **仅在从源码运行时需要**（发行版自带解释器）。
@@ -58,8 +61,8 @@
 
 ## 快速开始（发行版）
 
-1. 从 **Releases** 下载 `LLMSwitchStudio-win64.zip`，解压到任意位置。
-2. 双击 `LLMSwitchStudio.exe`。
+1. 从 **Releases** 下载 **`LLMSwitchStudio.exe`**：单文件，不用解压，也没有安装器。放到哪都行。
+2. 双击运行。首次启动要解包到临时目录，会比以后慢几秒。
 3. 如果没识别到模型，界面顶部会出现一条提示，把**含 `llama-server.exe` 的文件夹**粘进去，点保存。
 
 窗口没有系统标题栏：拖顶栏移动，右上角是自绘的 `— ▢ ✕`。**只有悬浮窗会置顶**，主窗口就是普通窗口。
@@ -68,28 +71,33 @@
 程序会在自身目录及最多五级父目录里找 `llama-server.exe`，所以把它放进（或紧挨着）llama.cpp 目录即可免配置。
 也可以设置环境变量 `LLAMA_SWITCH_DIR`。
 
+未签名的程序可能触发 Windows SmartScreen：点「更多信息 → 仍要运行」，或核对 Release 里公布的 SHA-256。
+
 ## 从源码运行
 
 ```
 python app.py                 # 正常窗口
 python app.py --mini          # 只开悬浮窗
 python app.py --serve         # 只跑后端，不开窗口
-python app.py --browser       # 用默认浏览器打开（不用 Edge app 窗口）
+python app.py --browser       # 用默认浏览器打开（不用原生窗口）
 python app.py --llama-dir D:\llama.cpp --port 8770 --llama-port 8080
 ```
 
+无边框原生窗口由 [pywebview](https://pywebview.flowrl.com/) + WebView2 提供
+（`pip install pywebview`）；没有它时会退回 Edge `--app` 窗口。
 `run.bat` / `run-mini.bat` 是找 Python 的包装脚本：每个候选解释器都会被**真正执行一次**并询问版本，
-不只依赖 `where py`。
+不只依赖 `where py`，并且优先选装了 `pywebview` 的那个。
 
 ## 打包 exe
 
 ```
-pip install pyinstaller
-python build_exe.py                  # 目录版 → dist/LLMSwitchStudio/
-python build_exe.py --onefile        # 单文件 → dist/LLMSwitchStudio.exe
+pip install pyinstaller pywebview
+python build_exe.py                  # 单文件 → dist/LLMSwitchStudio.exe
+python build_exe.py --onedir         # 目录版 → dist/LLMSwitchStudio/
 python build_exe.py --out D:\apps    # 自定义输出目录
 ```
 
+单文件版会把 Python、pywebview、pythonnet 和 WebView2 互操作 DLL 一起打进去（约 12 MB）。
 构建会先在临时目录跑 PyInstaller，再把产物拷回来——某些杀软会破坏"直接写进特定目录"的 exe。
 如果双击没反应、或报 `Could not load PyInstaller's embedded PKG archive`，换个输出目录，
 或者直接用源码跑。
@@ -104,8 +112,10 @@ python build_exe.py --out D:\apps    # 自定义输出目录
 │  · canvas 曲线 / 表单控件      │  轮询   │  monitor.py  /health /props        │
 └──────────────────────────────┘  token  │              /slots /metrics        │
 ┌──────────────────────────────┐         │  gguf.py     GGUF 头解析            │
-│  Edge --app 窗口              │◄────────┤  config.py   schema / 预设          │
-└──────────────────────────────┘         └────────────────────────────────────┘
+│  WebView2 窗口（pywebview）   │◄────────┤  config.py   schema / 预设          │
+│  · 真无边框、悬浮窗置顶        │         └────────────────────────────────────┘
+│  · Edge --app 兜底            │
+└──────────────────────────────┘
 ```
 
 两个端口，故意分开：
@@ -127,7 +137,7 @@ python build_exe.py --out D:\apps    # 自定义输出目录
   state.json        # 每模型参数、预设、窗口位置
   app.log           # 程序自己的操作日志
   llama-server.log  # llama.cpp 输出
-  edge-profile/     # 窗口专用的 Edge 配置目录
+  edge-profile/     # 兜底窗口专用的 Edge 配置目录
 ```
 
 `state.json` 就是普通 JSON，可以直接备份或搬到别的机器。
@@ -164,8 +174,14 @@ python build_exe.py --out D:\apps    # 自定义输出目录
 
 **端口被占。** 用 `--port` / `--llama-port` 改，注意两者要保持不同。
 
-**没有窗口。** 某些安全策略会拦 Edge 的 `--app` 模式，程序会自动退回默认浏览器打开（见 `app.log`）。
-也可以直接用 `--browser`。
+**没有窗口。** 程序先试 pywebview + WebView2，再试 Edge `--app`，最后退回默认浏览器（见 `app.log`）。
+`--browser` 直接走最后一种。如果始终没有原生窗口，请安装 WebView2 运行时，并确认 `msedge.exe` 存在。
+
+**窗口顶部有一条浏览器栏。** 说明当前用的是 Edge `--app` 兜底，它去不掉 Chromium 自己的标题条。
+装上 WebView2 就能得到真正的无边框窗口；`--framed` 则是主动恢复系统标题栏。
+
+**悬浮窗大小不对或跑到屏幕外。** 它是 320×112 逻辑像素（`--mini`），150% 缩放下即 480×168 物理像素。
+多显示器切换后位置会被限制在当前工作区内，重新打开即可。
 
 **杀软报毒。** 发行版是未签名的 PyInstaller 打包，个别引擎会按启发式报毒。可以核对 Release 里的哈希、
 把目录加入白名单，或者直接用源码跑。程序不联网，唯一的网络活动是 `127.0.0.1`。

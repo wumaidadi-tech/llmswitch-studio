@@ -4,13 +4,15 @@
 启动流程
   1. 读状态 → 定位 llama.cpp 目录（命令行 / 环境变量 / 上次使用 / 常见位置）
   2. 扫模型 → 起本地 HTTP 服务（127.0.0.1 + 随机 token）
-  3. 用 **Edge 的 app 模式**开窗口加载 UI：
-       · 主窗口（1280×880）= 入口页/控制台
-       · 紧凑窗口（400×300，`--mini`）= 悬浮窗，可置顶，与主窗口共享同一后端
+  3. 开窗口加载 UI，两种宿主自动选择：
+       · pywebview + WebView2（首选）：真正无边框，没有浏览器自绘标题条
+       · Edge --app（兜底）：零依赖，但页面顶部会多出约 29px 的 Chromium 栏
+     主窗口 = 控制台；`--mini` / 「打开悬浮窗」= 320×112 悬浮窗，可置顶，
+     两者共享同一后端。
   4. 所有窗口都关掉后回收进程
 
-为什么不用 pywebview / Electron：Edge 本身就是 Chromium（支持
-`backdrop-filter: url()`，这是做出折射的前提），`--app` 起窗口零依赖、零安装。
+UI 需要 Chromium 内核（`backdrop-filter: url()` 是液态玻璃折射的前提）：
+WebView2 与 Edge 都是 Chromium，所以两种宿主都能正确渲染。
 """
 import argparse
 import ctypes
@@ -112,11 +114,69 @@ EDGE_CLASS_HINT = "Chrome_WidgetWin"
 WV_CLASS_HINT = "WindowsForms10.Window"
 
 # 逻辑像素尺寸（pywebview 按 DPI 缩放；Edge --window-size 同样按 DPI）
-MINI_W, MINI_H = 320, 196
+MINI_W, MINI_H = 320, 112
 MAIN_W, MAIN_H = 1240, 840
 
+SPI_GETWORKAREA = 0x0030
+
+
+def dpi_scale():
+    """系统 DPI 缩放（150% -> 1.5）。pywebview 的 width/height 是逻辑像素，
+    物理像素 = 逻辑 × 该系数，所以超高分屏上直接给 840 会超出屏幕。"""
+    try:
+        user32.GetDpiForSystem.restype = ctypes.c_uint
+        d = int(user32.GetDpiForSystem())
+        if d > 0:
+            return d / 96.0
+    except Exception:
+        pass
+    return 1.0
+
+
+def work_area():
+    """屏幕可用区域（不含任务栏），返回逻辑像素 (left, top, w, h)。"""
+    r = wt.RECT()
+    try:
+        if not user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(r), 0):
+            return None
+        s = dpi_scale()
+        return (r.left / s, r.top / s, (r.right - r.left) / s, (r.bottom - r.top) / s)
+    except Exception:
+        return None
+
+
+def clamp_window(w, h, min_w=300, min_h=180):
+    """把窗口收进屏幕工作区，避免高 DPI 下窗口比屏幕还高。
+
+    下限可调：悬浮窗只有 320×112，不能套主窗口的 180 下限（否则被撑高，
+    底下留一条空白 —— 已实测）。
+    """
+    wa = work_area()
+    if not wa:
+        return int(w), int(h)
+    _x, _y, aw, ah = wa
+    return (max(int(min_w), int(min(w, aw - 24))),
+            max(int(min_h), int(min(h, ah - 24))))
+
+
+def center_pos(w, h):
+    wa = work_area()
+    if not wa:
+        return None, None
+    x, y, aw, ah = wa
+    return int(x + (aw - w) / 2), int(y + (ah - h) / 2)
+
+
+def _mini_corner():
+    """悬浮窗默认贴右下角（工作区，留 24 逻辑像素）。"""
+    wa = work_area()
+    if not wa:
+        return None, None
+    x, y, aw, ah = wa
+    return int(x + aw - MINI_W - 24), int(y + ah - MINI_H - 24)
+
 WINDOW_URL = [""]
-WEBVIEW = {"lib": None, "win": {}}     # pywebview 后端（有就用，没有退回 Edge）
+WEBVIEW = {"lib": None, "win": {}, "size": {}, "started": False}   # pywebview 后端
 FRAMELESS = True          # --framed 或 LLMSWITCH_FRAMED=1 可关掉无边框
 
 EDGE_CANDIDATES = [
@@ -159,11 +219,16 @@ def _MATCH_CLASS(cls):
     return (EDGE_CLASS_HINT in cls) or (WV_CLASS_HINT in cls)
 
 
-def find_window(title):
+def find_window(title, pid=None):
     """按 标题 + 窗口类 + 面积 找窗口。
 
     只用 FindWindowW(标题) 不行：Windows 会为应用窗口生成一个同名的
     `Shell.TabProxyWindow`（约 135×37），命中的是假句柄，置顶/关闭检测全部落空。
+
+    pid 不为 None 时只看该进程的窗口。pywebview 窗口必须带上 os.getpid()：
+    同时开着两个实例（或旧实例没关）时，标题完全相同，按面积挑最大会选中
+    另一个进程的悬浮窗 —— 尺寸修正就修到了别人身上（实测打包版调试时踩到）。
+    Edge --app 的窗口属于 msedge.exe，那条路径仍用全局匹配。
     """
     best, best_area = None, 0
     h = user32.GetTopWindow(None)
@@ -175,6 +240,12 @@ def find_window(title):
                 cls = ctypes.create_unicode_buffer(128)
                 user32.GetClassNameW(h, cls, 128)
                 if _MATCH_CLASS(cls.value):
+                    if pid is not None:
+                        wpid = ctypes.c_ulong()
+                        user32.GetWindowThreadProcessId(h, ctypes.byref(wpid))
+                        if wpid.value != pid:
+                            h = user32.GetWindow(h, GW_HWNDNEXT)
+                            continue
                     n = user32.GetWindowTextLengthW(h)
                     if n:
                         buf = ctypes.create_unicode_buffer(n + 1)
@@ -221,8 +292,15 @@ def make_frameless(hwnd):
 
 
 def resize_window(hwnd, w, h, x=None, y=None):
+    """w/h 是逻辑像素，SetWindowPos 要物理像素（否则高 DPI 下会缩水）。"""
+    try:
+        user32.GetDpiForWindow.restype = ctypes.c_uint
+        s = (int(user32.GetDpiForWindow(ctypes.c_void_p(hwnd))) or 96) / 96.0
+    except Exception:
+        s = 1.0
     flags = SWP_NOZORDER | SWP_NOACTIVATE | (SWP_NOMOVE if x is None else 0)
-    user32.SetWindowPos(ctypes.c_void_p(hwnd), None, x or 0, y or 0, int(w), int(h), flags)
+    user32.SetWindowPos(ctypes.c_void_p(hwnd), None, x or 0, y or 0,
+                        int(w * s), int(h * s), flags)
 
 
 def prepare_window(title, topmost=False, w=None, h=None, timeout=20):
@@ -267,12 +345,24 @@ def window_action(action, mini=False, topmost=False, w=None, h=None):
     if win is not None:
         try:
             if action == "open":
-                win.show()
+                # 最小化后再点「打开悬浮窗」：Show() 不会还原，先 SW_RESTORE
+                hwnd = find_window(title, os.getpid())
+                if hwnd and user32.IsIconic(ctypes.c_void_p(hwnd)):
+                    user32.ShowWindow(ctypes.c_void_p(hwnd), SW_RESTORE)
+                if win.gui is not None and getattr(win, "hidden", False):
+                    win.gui.show(win.uid)     # hidden 窗口不触发 shown，绕过装饰器
+                    win.hidden = False
+                else:
+                    try:
+                        win.restore()      # 还原最小化；对正常窗口无副作用
+                    except Exception:
+                        pass
+                    win.show()
                 if topmost:
                     win.on_top = True
                 return True
             if action == "drag":
-                hwnd = find_window(title)
+                hwnd = find_window(title, os.getpid())
                 if not hwnd:
                     return False
                 return drag_window(hwnd)
@@ -298,7 +388,7 @@ def window_action(action, mini=False, topmost=False, w=None, h=None):
                         other.restore()
                     except Exception:
                         pass
-                    h = find_window(paths.APP_TITLE)
+                    h = find_window(paths.APP_TITLE, os.getpid())
                     if h:
                         user32.ShowWindow(ctypes.c_void_p(h), SW_RESTORE)
                         user32.SetForegroundWindow(ctypes.c_void_p(h))
@@ -306,7 +396,9 @@ def window_action(action, mini=False, topmost=False, w=None, h=None):
                     win.destroy()
                     WEBVIEW["win"].pop(title, None)
                     return "focus-main"
-                win.resize(MAIN_W, MAIN_H)
+                ew, eh = clamp_window(MAIN_W, MAIN_H)
+                win.resize(ew, eh)
+                _fix_webview_size(title, ew, eh)
                 win.show()
                 return "expanded"
         except Exception as exc:                       # noqa: BLE001
@@ -317,9 +409,13 @@ def window_action(action, mini=False, topmost=False, w=None, h=None):
         if webview_lib():
             dw = MINI_W if mini else MAIN_W
             dh = MINI_H if mini else MAIN_H
+            if mini:
+                px, py = _mini_corner()
+            else:
+                px, py = center_pos(*clamp_window(w or dw, h or dh))
             return bool(webview_window(title, WINDOW_URL[0] + ("&mini=1" if mini else ""),
                                        w or dw, h or dh,
-                                       mini=mini, topmost=topmost))
+                                       mini=mini, topmost=topmost, x=px, y=py))
         return bool(open_window(WINDOW_URL[0] + ("&mini=1" if mini else ""), mini, topmost,
                                 w or (MINI_W if mini else MAIN_W),
                                 h or (MINI_H if mini else MAIN_H)))
@@ -381,20 +477,107 @@ def webview_lib():
     return WEBVIEW["lib"]
 
 
-def webview_window(title, url, w, h, mini=False, topmost=False, show=True):
+def _fix_webview_size(title, w, h, timeout=4.0, settle=1.4):
+    """按物理像素把窗口设成请求的 CSS 尺寸。
+
+    pywebview/WinForms 建窗时会吃掉一圈不可见边框（本机 150% 缩放下
+    1280×860 实测只有 1266×823，悬浮窗 320×112 只有 306×75），
+    不修的话紧凑布局会被裁掉。
+
+    而且不能只设一次：Form 先按带边框的尺寸建出来，再把 FormBorderStyle
+    改成 None；WinForms 改边框时**保持 client 不变、把外框缩回 client 尺寸**，
+    会把我们刚设的外框吃掉（打包版首次开悬浮窗实测 480×168 → 458×144，
+    CSS 只拿到 306×96）。这里在 settle 时间内反复校准，连续 0.3 秒稳定
+    在目标尺寸才收手。
+    """
+    end = time.time() + timeout
+    hwnd = None
+    while time.time() < end:
+        hwnd = find_window(title, os.getpid())
+        if hwnd:
+            break
+        time.sleep(0.1)
+    if not hwnd:
+        config.log("size fix %r: window not found" % title)
+        return False
+    try:
+        user32.GetDpiForWindow.restype = ctypes.c_uint
+        dpi = int(user32.GetDpiForWindow(ctypes.c_void_p(hwnd))) or 96
+    except Exception:
+        dpi = 96
+    s = dpi / 96.0
+    tw, th = int(round(w * s)), int(round(h * s))
+    last, stable_since = (0, 0), None
+    stop = time.time() + settle
+    while True:
+        user32.SetWindowPos(ctypes.c_void_p(hwnd), None, 0, 0, tw, th,
+                            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE)
+        time.sleep(0.1)
+        r = wt.RECT()
+        user32.GetWindowRect(ctypes.c_void_p(hwnd), ctypes.byref(r))
+        last = (r.right - r.left, r.bottom - r.top)
+        if last == (tw, th):
+            stable_since = stable_since or time.time()
+            if time.time() - stable_since >= 0.3:
+                break
+        else:
+            stable_since = None
+        if time.time() >= stop:
+            break
+    ok = last == (tw, th)
+    config.log("window %s: size %dx%d -> %dx%d%s"
+               % (title, last[0], last[1], tw, th, "" if ok else " (MISMATCH)"))
+    return ok
+
+
+def _fix_all_sizes():
+    time.sleep(0.4)
+    for title, (w, h) in list(WEBVIEW["size"].items()):
+        _fix_webview_size(title, w, h, timeout=2.0)
+
+
+def webview_window(title, url, w, h, mini=False, topmost=False, show=True,
+                   x=None, y=None):
     wv = webview_lib()
     if not wv:
         return None
+    w, h = clamp_window(int(w), int(h), 240, 96) if mini else clamp_window(int(w), int(h))
     try:
+        extra = {}
+        if x is not None:
+            extra["x"] = int(x)
+        if y is not None:
+            extra["y"] = int(y)
         win = wv.create_window(
             title, url,
-            width=int(w), height=int(h),
+            width=w, height=h,
             frameless=bool(FRAMELESS), easy_drag=False,
             on_top=bool(topmost), background_color="#070910",
             hidden=not show,
-            min_size=(260, 150) if mini else (760, 560),
+            min_size=(240, 96) if mini else (760, 560),
+            **extra,
         )
         WEBVIEW["win"][title] = win
+        WEBVIEW["size"][title] = (w, h)
+        config.log("window %s: request %dx%d initial %sx%s uid=%s"
+                   % (title, w, h, win.initial_width, win.initial_height, win.uid))
+        # start() 之前 GUI 循环还没跑，窗口尚未真正创建；那时调用会白等。
+        # 另外窗口在 Show 的那一刻还会被 WinForms 重新按 client 定一次外框，
+        # 所以 shown 之后再补一次；再加一个定时兜底，防止事件注册晚于 Show。
+        if show and WEBVIEW["started"]:
+            _fix_webview_size(title, w, h, settle=0.4)
+
+            def _refix():
+                _fix_webview_size(title, w, h, timeout=2.0, settle=0.8)
+
+            try:
+                win.events.shown += lambda *_: threading.Thread(
+                    target=_refix, daemon=True).start()
+            except Exception:
+                pass
+            timer = threading.Timer(1.0, _refix)
+            timer.daemon = True
+            timer.start()
         return win
     except Exception as exc:                           # noqa: BLE001
         config.log("create_window FAILED %r" % (exc,))
@@ -439,7 +622,7 @@ def open_window(url, mini=False, topmost=False, w=1280, h=880, pos=None):
     exe = find_edge()
     if not exe:
         return None
-    sw, sh = (w, h) if not mini else (MINI_W, MINI_H)
+    sw, sh = (MINI_W, MINI_H) if mini else clamp_window(int(w), int(h))
     if webview_lib():
         win = webview_window(paths.MINI_TITLE if mini else paths.APP_TITLE,
                              url, sw, sh, mini=mini, topmost=topmost)
@@ -563,8 +746,13 @@ def main():
     WINDOW_URL[0] = base_url
 
     def _win(action, mini, topmost, w, h):
-        return window_action(action, mini, topmost, w or win.get("w") or 1280,
-                             h or win.get("h") or 880)
+        # 主窗口的保存尺寸只用于主窗口；悬浮窗必须用自己的 320×112，
+        # 否则会被主窗口的 w/h 覆盖成整屏大小（已实测）。
+        if mini:
+            return window_action(action, mini, topmost, w, h)
+        return window_action(action, mini, topmost,
+                             w or win.get("w") or MAIN_W,
+                             h or win.get("h") or MAIN_H)
 
     api.set_window_opener(_win)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -577,13 +765,16 @@ def main():
         if not args.browser and webview_lib():
             use_wv = True
             if args.mini:
-                webview_window(paths.MINI_TITLE, url, MINI_W, MINI_H, mini=True, topmost=True)
+                mini_pos = _mini_corner()
+                webview_window(paths.MINI_TITLE, url, MINI_W, MINI_H, mini=True,
+                               topmost=True, x=mini_pos[0], y=mini_pos[1])
             else:
-                webview_window(paths.APP_TITLE, base_url,
-                               win.get("w") or MAIN_W, win.get("h") or MAIN_H)
-                # 悬浮窗先建好再藏着：点"打开悬浮窗"直接 show，避免二次开窗口卡顿
-                webview_window(paths.MINI_TITLE, base_url + "&mini=1", MINI_W, MINI_H,
-                               mini=True, topmost=True, show=False)
+                mw, mh = clamp_window(int(win.get("w") or MAIN_W),
+                                      int(win.get("h") or MAIN_H))
+                mx, my = center_pos(mw, mh)
+                webview_window(paths.APP_TITLE, base_url, mw, mh, x=mx, y=my)
+                # 悬浮窗按需创建。不要预建 hidden 窗口：pywebview 的 shown 事件
+                # 对 hidden 窗口永远不触发，之后 show() 会白等 20 秒（已实测）。
             config.log("ui backend: pywebview (frameless=%s)" % FRAMELESS)
         elif args.browser or not find_edge():
             os.startfile(url)                          # noqa: S606
@@ -595,7 +786,9 @@ def main():
 
     try:
         if use_wv:
-            WEBVIEW["lib"].start()                     # 阻塞到所有窗口关闭
+            WEBVIEW["started"] = True
+            # start(func)：GUI 起来后在子线程执行，补正 pre-start 建窗时的尺寸损耗
+            WEBVIEW["lib"].start(_fix_all_sizes)        # 阻塞到所有窗口关闭
             stop_evt.set()
         else:
             while not stop_evt.is_set():
