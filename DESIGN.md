@@ -509,9 +509,24 @@ primary 的深色字；hover 时 `.btn.primary:hover`（0,3,0）赢回来，所�
 - **侧栏菜单**：去掉与品牌区重复的标题/版本号，改成一行"状态 · llama 端口"；补齐
   打开日志 / 客户端接入 / GitHub / 退出程序。退出走后端 `/api/quit`（app.py 注入）。
 - **日志页**：关键词过滤 + 「只看错误」；日志区改成 flex 填满剩余高度，诊断展开时自动让位。
-- **写入客户端**（`core/clients.py`）：WorkBuddy 的 `models.json` 是 JSON 数组 → 按 id 合并、
-  保留未知字段、写前备份、原子替换；通用 `.env` / `client.json` 写到数据目录，任何 agent 都能读。
-  Codex 的 `config.toml` 由 cc-switch 托管，**只导出不写**，避免破坏第三方管理。
+- **写入客户端**（`core/clients.py`，参考 cc-switch 的做法）：只改必要键、保留注释/排版/其它 provider、
+  写前备份、原子替换。支持 WorkBuddy `models.json`（按 id 合并）、Claude Code
+  `~/.claude/settings.json`（env.ANTHROPIC_BASE_URL/AUTH_TOKEN，b10775 的 `/v1/messages` 实测可用）、
+  Codex `config.toml`（顶层 model/model_provider + `[model_providers.llama-local]`），
+  以及通用 `.env` / `client.json`。
 - **托盘 / 开机自启**：`core/tray.py`（ctypes + Shell_NotifyIcon + 消息专用窗口，菜单四项）与
   `core/autostart.py`（HKCU Run，无需管理员）。托盘失败只写日志、不影响主程序；
   "关窗口驻留"靠 pywebview 的 `closing` 事件返回 False + hide 实现。
+
+### 8.10 v2.3.1：按实测反馈修的一轮
+
+- **诊断"没反应"**：不是没跑，而是没问题时面板里什么都没有（只有一行 summary）。现在固定返回
+  9 项检查（llama.cpp / 模型 / 元数据 / 视觉 / 投机 / 端口 / 显存 / LoRA / 日志错误），
+  每项带 ok 与细节，渲染成一排 chip；"展开/收起"始终有内容可切。
+  同时修掉运行中误报"显存不够"（free 变小是自己占的，不是预算不足）。
+- **日志级别**：把"只看错误"按钮换成下拉（全部 / 只看错误 / 警告+错误）。
+- **客户端写入**：补 Claude Code（`settings.json` env；实测 b10775 的 `/v1/messages` 可用）与
+  Codex（`config.toml` 顶层 model/model_provider + `[model_providers.llama-local]`，只改必要键、
+  保留注释与其它 provider，重复写不产生重复段落）。
+- **悬浮窗按钮**：22px 圆形改成 24px 圆角方块 + 渐变/内高光；运行中改成玫红"停止"而不是绿色。
+- **托盘默认关**：`lifecycle.tray` 默认 false（用户配置里那次测试写的 true 已改回）。

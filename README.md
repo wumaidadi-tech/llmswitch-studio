@@ -60,10 +60,11 @@ Everything is local. No telemetry, no account, no cloud.
 - **Tray & autostart** (Service page) — closing the window can keep the app running in the tray
   (open main / HUD / start·stop / quit from the menu); autostart writes a HKCU Run entry and opens
   only the HUD at login. No admin rights needed.
-- **Write into clients** — besides copying, write the **WorkBuddy `models.json`** entry (merged by id,
-  unknown fields kept, backup made) or export a generic `.env` / `client.json` for any agent. Configs
-  owned by other tools (e.g. Codex under cc-switch) are exported, never rewritten.
-- **Log filter** — keyword search plus an "errors only" toggle.
+- **Write into clients** — besides copying, write **WorkBuddy** (`models.json`, merged by id),
+  **Claude Code** (`~/.claude/settings.json` env) and **Codex CLI** (`[model_providers.llama-local]`
+  in `config.toml`), plus a generic `.env` / `client.json`. Only the needed keys change, a backup is
+  taken first and writes are atomic. Claude Code talks to `/v1/messages` (supported since b10775).
+- **Log filter** — keyword search plus a level dropdown (all / errors / warnings+errors).
 - **Update check** — menu → Check for updates compares your version with the latest GitHub release.
 - **Logs** — tail of `llama-server` output with error highlighting.
 - **Export** — copy the exact command line that was used, or export JSON / `.bat` / `.sh`.

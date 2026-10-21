@@ -432,7 +432,11 @@
           <div><h2>日志</h2><p>llama-server 的 --log-file 尾部 · 起不来时先看下面的诊断</p></div>
           <div class="hdr-actions">
             <input class="log-search" id="logSearch" placeholder="过滤日志…" autocomplete="off" spellcheck="false">
-            <button class="btn mini ghost" id="btnLogErr" title="只看错误行">只看错误</button>
+            <select class="log-level" id="logLevel" title="按级别过滤">
+              <option value="all">全部级别</option>
+              <option value="error">只看错误</option>
+              <option value="warn">警告 + 错误</option>
+            </select>
             <label class="switch"><input type="checkbox" id="logAuto" checked><span></span>自动刷新</label>
             <button class="btn ghost" id="btnOpenLog">用记事本打开</button>
             <button class="btn ghost" id="btnCopyLog">复制</button>
@@ -451,6 +455,7 @@
           </div>
           <div class="diag-sum" id="diagSum">还没诊断。点「开始诊断」；启动失败或显存预警时，概览页的提示条会直接带你到这里。</div>
           <div id="diagBody" hidden>
+            <div class="diag-checks" id="diagChecks"></div>
             <div class="diag-list" id="diagList"></div>
             <pre class="diag-ev" id="diagEv" hidden></pre>
           </div>
@@ -470,7 +475,7 @@
   <div class="hud-top" id="hudTop">
     <button class="hud-run" id="hudRun" title="启动">
       <svg class="ic-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg>
-      <svg class="ic-stop" viewBox="0 0 24 24"><rect x="7" y="5" width="10" height="14" rx="2.2"/></svg>
+      <svg class="ic-stop" viewBox="0 0 24 24"><rect x="7.2" y="7.2" width="9.6" height="9.6" rx="2.4"/></svg>
     </button>
     <div class="hud-state">
       <b id="hudStage">已停止</b>

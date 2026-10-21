@@ -24,7 +24,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import autostart, clients, config, diagnose, gguf, monitor, paths, server
 
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.3.1"
 REPO_URL = "https://github.com/wumaidadi-tech/llmswitch-studio"
 RELEASES_API = "https://api.github.com/repos/wumaidadi-tech/llmswitch-studio/releases/latest"
 

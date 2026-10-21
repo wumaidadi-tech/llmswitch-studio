@@ -89,6 +89,54 @@ def _item(level, title, detail, fixes):
             "fix": [f for f in (fixes or []) if f]}
 
 
+def _checks(entry, cfg, st, free, need, log_lines):
+    """固定检查项 —— 即使没有任何问题也要有东西可看，
+    不然"开始诊断"点下去像没反应。"""
+    lau = (cfg.get("launch") or {})
+    sam = (cfg.get("sampling") or {})
+    out = []
+
+    def add(name, ok, detail):
+        out.append({"name": name, "ok": bool(ok), "detail": detail})
+
+    ok_dir = paths.looks_like_llama(paths.LLAMA_DIR)
+    add("llama.cpp", ok_dir, paths.LLAMA_DIR or "未设置 llama-server.exe 所在目录")
+    add("模型文件", bool(entry),
+        entry["label"] if entry else "models/ 下没有 .gguf")
+    if entry:
+        meta = entry.get("meta") or {}
+        add("元数据", not meta.get("error"),
+            "架构 %s" % (meta.get("arch") or "?") if not meta.get("error") else meta.get("error"))
+    add("视觉投影", not (lau.get("mmproj") and entry and not entry.get("mmproj")),
+        "有 mmproj" if (entry and entry.get("mmproj")) else "没有 mmproj（不影响纯文本）")
+    can_mtp = bool(entry and (entry.get("mtp") or entry.get("has_nextn")))
+    add("投机解码", not (lau.get("spec") == "draft-mtp" and not can_mtp),
+        "MTP 可用" if can_mtp else "模型无 MTP 头，已按关闭处理")
+    port = st.get("llama_port") or paths.DEFAULT_LLAMA_PORT
+    if st.get("stage") in ("running", "starting"):
+        add("端口", True, "%s 正在被本程序使用" % port)
+    else:
+        busy = _port_busy(port)
+        add("端口", not busy, "%s %s" % (port, "被其它程序占用" if busy else "空闲"))
+    active = st.get("stage") in ("running", "starting")
+    if free and active:
+        add("显存预算", True, "运行中：当前可用 %d MiB（已含本服务占用）" % free)
+    elif free:
+        add("显存预算", need <= free, "需要 %d / 可用 %d MiB" % (need, free))
+    else:
+        add("显存预算", True, "读不到显卡信息，跳过（需要 %d MiB）" % need)
+    missing = [lo for lo in (lau.get("loras") or [])
+               if lo.get("on") and not os.path.isfile(lo.get("path") or "")]
+    add("LoRA", not missing, "缺失 %d 个" % len(missing) if missing else
+        ("%d 个已启用" % sum(1 for x in (lau.get("loras") or []) if x.get("on"))))
+    errs = [ln for ln in log_lines
+            if re.search(r"\bE\b|out of memory|cudaMalloc failed|failed to load model",
+                         ln, re.I)]
+    add("日志错误", not errs, ("最近日志里 %d 条错误行" % len(errs)) if errs else
+        "最近 %d 行无错误关键词" % len(log_lines))
+    return out
+
+
 def run(mgr, entry=None, cfg=None, lines=None, free_mib=None):
     st = mgr.status()
     entry = entry or config.model_entry()
@@ -109,7 +157,7 @@ def run(mgr, entry=None, cfg=None, lines=None, free_mib=None):
         need = config.vram_need(int(ctx), kv)
     except Exception:
         ctx, kv, need = 0, "", 0
-    if free and need > free:
+    if free and need > free and st.get("stage") not in ("running", "starting"):
         items.append(_item(
             "warn", "预计显存不够（配置层面）",
             "按当前配置估算需要 %d MiB，可用只有 %d MiB。" % (need, free),
@@ -178,11 +226,15 @@ def run(mgr, entry=None, cfg=None, lines=None, free_mib=None):
         seen.add(it["title"])
         uniq.append(it)
 
+    checks = _checks(entry, cfg, st, free, need, log_lines)
     evidence = [ln for ln in log_lines if _RE_EVIDENCE.search(ln) and not _RE_SKIP.search(ln)][-8:]
     evidence = [re.sub(r"^[\d.:\s]+[IWED]\s+", "", ln)[:300] for ln in evidence]
 
     if not uniq:
-        summary = "没有发现明显问题。日志里也没有 OOM / 参数被拒 / 端口占用的痕迹。"
+        bad = sum(1 for c in checks if not c["ok"])
+        summary = ("%d 项检查全部通过，日志里也没有 OOM / 参数被拒 / 端口占用的痕迹。"
+                   % len(checks)) if not bad else ("%d 项检查里有 %d 项没通过，见下。"
+                                                   % (len(checks), bad))
     else:
         bad = sum(1 for it in uniq if it["level"] == "error")
         summary = ("发现 %d 个错误、%d 个风险。" % (bad, len(uniq) - bad)) if bad \
@@ -192,6 +244,7 @@ def run(mgr, entry=None, cfg=None, lines=None, free_mib=None):
         "stage": st["stage"],
         "summary": summary,
         "items": uniq,
+        "checks": checks,
         "evidence": evidence,
         "meta": {"ctx": ctx, "kv": kv, "need_mib": need, "free_mib": free,
                  "port": st.get("llama_port"), "model": entry["label"] if entry else "",

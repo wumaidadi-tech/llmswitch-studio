@@ -139,7 +139,9 @@
     $('#setupStrip').hidden = !needDir;
     const need = S.plan.need_mib, free = S.plan.vram_free;
     const isErr = st === 'error';
-    const over = !needDir && need > free && S.plan.vram_total;
+    // 运行中 free 变小是因为模型已经占住了显存，不是"预算不够"，别误报
+    const active = st === 'running' || st === 'starting';
+    const over = !needDir && !active && need > free && S.plan.vram_total;
     $('#warnStrip').hidden = !(over || isErr);
     $('#warnDiag').hidden = !(over || isErr);
     if (over) {
@@ -791,7 +793,9 @@
     const box = $('#clientWrite');
     if (!box || !clientTargets) return;
     const html = clientTargets.map((t) => {
-      const label = t.writable ? ('写入 ' + t.name) : t.name;
+      const short = t.id === 'env' ? '写入 .env' : t.id === 'json' ? '写入 client.json'
+        : ('写入 ' + t.name);
+      const label = t.writable ? short : t.name;
       return '<button class="btn mini ghost" data-write="' + esc(t.id) + '"'
         + (t.writable ? '' : ' disabled')
         + ' title="' + esc((t.writable ? '写入 ' : '不直接改：') + t.path
@@ -1031,6 +1035,11 @@
     lastDiag = d;
     $('#diagSum').textContent = d.summary || '—';
     const items = d.items || [];
+    const checks = d.checks || [];
+    // 固定检查项：即使没有问题也要有东西可看，否则"开始诊断"点下去像没反应
+    $('#diagChecks').innerHTML = checks.map((c) =>
+      '<span class="chk ' + (c.ok ? 'ok' : 'bad') + '" title="' + esc(c.detail) + '">'
+      + '<i>' + (c.ok ? '✔' : '✕') + '</i>' + esc(c.name) + '</span>').join('');
     // 没有条目时保持为空（CSS :empty 会隐藏），结论已经在 summary 里，别重复一遍
     $('#diagList').innerHTML = items.map((it) =>
       '<div class="diag-item ' + esc(it.level || 'info') + '"><b>' + esc(it.title) + '</b>'
@@ -1134,9 +1143,12 @@
     const box = $('#logBox');
     if (!box) return;
     const q = ($('#logSearch').value || '').trim().toLowerCase();
-    const onlyErr = $('#btnLogErr').classList.contains('on');
+    const level = ($('#logLevel') && $('#logLevel').value) || 'all';
+    const isErr = (ln) => /\bE\b|error|failed|out of memory|oom/i.test(ln);
+    const isWarn = (ln) => /\bW\b|warn/i.test(ln);
     const rows = logLines.filter((ln) => {
-      if (onlyErr && !/\bE\b|error|failed|out of memory|oom/i.test(ln)) return false;
+      if (level === 'error' && !isErr(ln)) return false;
+      if (level === 'warn' && !(isErr(ln) || isWarn(ln))) return false;
       if (q && ln.toLowerCase().indexOf(q) < 0) return false;
       return true;
     });
@@ -1145,7 +1157,7 @@
       if (/\bE\b|error|failed/i.test(ln)) return '<span class="e">' + e + '</span>';
       if (/\bW\b|warn/i.test(ln)) return '<span class="w">' + e + '</span>';
       return e;
-    }).join('\n') || (q || onlyErr ? '（没有匹配的日志，清空过滤条件试试）' : '（暂无日志）');
+    }).join('\n') || (q || level !== 'all' ? '（没有匹配的日志，换个条件试试）' : '（暂无日志）');
     if (!q) box.scrollTop = box.scrollHeight;
   }
 
@@ -1695,11 +1707,7 @@
 
     $('#btnCopyLog').addEventListener('click', () => { copy($('#logBox').textContent); toast('已复制', 'ok'); });
     $('#logSearch').addEventListener('input', renderLogs);
-    $('#btnLogErr').addEventListener('click', () => {
-      const b = $('#btnLogErr');
-      b.classList.toggle('on');
-      renderLogs();
-    });
+    $('#logLevel').addEventListener('change', renderLogs);
     $('#btnOpenLog').addEventListener('click', () => {
       api('/api/reveal', { json: { target: 'log' } }).catch(() => {});
     });
