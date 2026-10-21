@@ -35,8 +35,8 @@
   支持**另存为预设**，把自己调好的一整套参数存下来复用。采样器顺序只决定执行顺序，不套用预设值。
 - **悬浮窗**：320×112 的置顶小窗：状态、tok/s、显存、上下文进度条，点模型行就地切换；
   启动/停止是左侧小圆钮，展开和关闭是右上角图标，平时不占地方。
-- **网页端与端口**：同一套界面也跑在 `127.0.0.1` 上，可以在浏览器打开；端口能就地切换，
-  两个窗口会自动重载，重启后沿用。
+- **llama.cpp 端口与网页**：在“运行 → llama-server 接口”里修改 llama-server 端口，运行中改会重启服务；
+  右上角地球按钮打开 llama.cpp 自带的网页。
 - **检查更新**：菜单 → 检查更新，与 GitHub 最新 Release 对比版本。
 - **日志**：`llama-server` 输出尾部实时刷新，错误行高亮。
 - **导出**：复制当前实际使用的命令行，或导出 JSON / `.bat` / `.sh`。
@@ -164,8 +164,8 @@ LLMSwitchData/
 | POST | `/api/presets` | `{"action":"save\|delete\|get","name":"…","cfg":{…}}` |
 | POST | `/api/window` | `{"mini":true,"topmost":true}`：打开悬浮窗 |
 | POST | `/api/settings` | `{"llama_dir":"D:\\llama.cpp"}` |
-| POST | `/api/open-web` | 在默认浏览器中打开网页端 |
-| POST | `/api/console-port` | `{"port":8790}`：就地切换网页端口 |
+| POST | `/api/open-web` | 打开 llama.cpp 自带的网页（llama-server 端口） |
+| POST | `/api/llama-port` | `{"port":8080}`：修改 llama-server 端口（运行中会重启服务） |
 | POST | `/api/open-url` | 打开项目页面（只接受仓库地址） |
 | GET | `/api/update` | 对比 GitHub 最新 Release 与当前版本 |
 

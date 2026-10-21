@@ -168,15 +168,23 @@
     fill.classList.toggle('hot', pct > 85);
     $('#vramTxt').textContent = total ? ((used / 1024).toFixed(1) + ' / ' + (total / 1024).toFixed(1) + ' GB') : '未检测到';
     $('#footVram').textContent = total ? ((used / 1024).toFixed(1) + ' / ' + (total / 1024).toFixed(1) + ' GB') : '—';
+    const lp = S.paths.llama_port || S.paths.port;
     const fp = $('#footPort');
-    fp.textContent = S.paths.llama_port || S.paths.port;
-    fp.title = 'llama-server: ' + (S.paths.llama_port || '') + ' · 控制台: ' + S.paths.port;
+    fp.textContent = lp;
+    fp.title = 'llama-server 端口 · 点击修改';
+    const pin = $('#llamaPortInput');
+    if (pin && document.activeElement !== pin) pin.value = lp;
+    const ps = $('#portStage');
+    if (ps) {
+      const st = S.status.stage;
+      const on = st === 'running' || st === 'starting';
+      ps.textContent = st === 'running' ? '运行中' : (st === 'starting' ? '启动中' : '未运行');
+      ps.className = 'tag' + (on ? ' run' : '');
+    }
     $('#modelCount').textContent = S.models.length;
     $('#verTag').textContent = 'v' + S.version;
-    const cp = $('#footConsolePort');
-    if (cp) cp.textContent = S.paths.port;
     const mm = $('#menuMeta');
-    if (mm) mm.textContent = 'v' + S.version + ' · 127.0.0.1:' + S.paths.port;
+    if (mm) mm.textContent = 'v' + S.version + ' · llama :' + lp;
   }
 
   /* 悬浮窗：状态 / 模型 / 上下文三行，和主界面共用同一份 snapshot */
@@ -897,35 +905,52 @@
       .catch((e) => toast('打开失败：' + (e.message || e), 'err'));
   }
 
-  function openPortModal() {
-    if (!S) return;
-    $('#portInput').value = S.paths.port || '';
-    $('#portAddr').textContent = '127.0.0.1:' + (S.paths.port || '—');
-    $('#portModal').hidden = false;
-    setTimeout(() => { const el = $('#portInput'); el.focus(); el.select(); }, 30);
+  function focusLlamaPort() {
+    setTab('runtime');
+    setTimeout(() => {
+      const el = $('#llamaPortInput');
+      if (el) {
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        el.focus();
+        el.select();
+      }
+    }, 180);
   }
 
-  async function applyPort() {
-    const port = parseInt($('#portInput').value, 10);
+  function bumpLlamaPort(delta) {
+    const el = $('#llamaPortInput');
+    let v = parseInt(el.value, 10);
+    if (!Number.isFinite(v)) v = 1024;
+    el.value = Math.min(65535, Math.max(1024, v + delta));
+    el.focus();
+    el.select();
+  }
+
+  async function applyLlamaPort() {
+    if (!S) return;
+    const port = parseInt($('#llamaPortInput').value, 10);
     if (!(port >= 1024 && port <= 65535)) {
       toast('端口需在 1024–65535 之间', 'err');
       return;
     }
-    if (!S) return;
-    if (port === S.paths.port) { $('#portModal').hidden = true; return; }
+    const old = Number(S.paths.llama_port || 0);
+    if (port === old) { toast('端口没有变化'); return; }
     if (DEMO) {
-      S.paths.port = port;
-      $('#portModal').hidden = true;
+      S.paths.llama_port = port;
       renderTop();
-      toast('演示模式：端口已改为 ' + port, 'ok');
+      toast('演示模式：llama 端口已改为 ' + port, 'ok');
       return;
     }
     try {
-      const d = await api('/api/console-port', { json: { port } });
-      toast('端口已切换到 ' + port + '，正在重载…', 'ok');
-      setTimeout(() => { location.href = d.url; }, 250);
+      const d = await api('/api/llama-port', { json: { port } });
+      S.paths.llama_port = port;
+      $('#llamaPortInput').blur();
+      renderTop();
+      if (d.restarted) toast('端口已改为 ' + port + '，正在重启 llama-server…', 'ok');
+      else toast('端口已保存为 ' + port + '（下次启动生效）', 'ok');
+      tick();
     } catch (e) {
-      toast('切换失败：' + (e.message || e), 'err');
+      toast('修改失败：' + (e.message || e), 'err');
     }
   }
 
@@ -1212,15 +1237,18 @@
       brand.setAttribute('aria-expanded', 'false');
       const cmd = b.dataset.cmd;
       if (cmd === 'folder') openDataDir();
-      if (cmd === 'ports') openPortModal();
+      if (cmd === 'ports') focusLlamaPort();
       if (cmd === 'update') checkUpdate();
       if (cmd === 'about') openAbout();
     });
 
     $('#btnWeb').addEventListener('click', openWeb);
-    $('#portApply').addEventListener('click', applyPort);
-    $('#portOpenWeb').addEventListener('click', openWeb);
-    $('#portInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') applyPort(); });
+    $('#footPortRow').addEventListener('click', focusLlamaPort);
+    $('#llamaPortApply').addEventListener('click', applyLlamaPort);
+    $('#llamaPortOpen').addEventListener('click', openWeb);
+    $('#llamaPortMinus').addEventListener('click', () => bumpLlamaPort(-1));
+    $('#llamaPortPlus').addEventListener('click', () => bumpLlamaPort(1));
+    $('#llamaPortInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') applyLlamaPort(); });
     $('#aboutFolder').addEventListener('click', openDataDir);
     $('#aboutUpdate').addEventListener('click', () => { $('#aboutModal').hidden = true; checkUpdate(); });
     $('#aboutGithub').addEventListener('click', openGithub);
@@ -1232,7 +1260,7 @@
         if (el) el.hidden = true;
       }
     });
-    ['portModal', 'aboutModal', 'updateModal'].forEach((id) => {
+    ['aboutModal', 'updateModal'].forEach((id) => {
       const m = document.getElementById(id);
       if (!m) return;
       m.addEventListener('click', (ev) => { if (ev.target.id === id) m.hidden = true; });
@@ -1263,7 +1291,7 @@
       if (e.altKey && e.key.toLowerCase() === 'r') { e.preventDefault(); $('#btnRestart').click(); }
       if (e.key === 'Escape') {
         closeModal(); closeSel(); $('#brandMenu').hidden = true;
-        ['portModal', 'aboutModal', 'updateModal'].forEach((id) => {
+        ['aboutModal', 'updateModal'].forEach((id) => {
           const m = document.getElementById(id);
           if (m) m.hidden = true;
         });
@@ -1568,7 +1596,7 @@
       repeat_n: '256', dry_mult: '0.8', dry_base: '1.75', dry_len: '2', dry_n: '512', xtc_prob: '0',
       xtc_thresh: '0.1', typical_p: '1', budget: '512', seed: '-1', sampler_order: 'rec', sty: 'gen' };
     return {
-      ok: true, version: '2.1.2', ts: now,
+      ok: true, version: '2.1.3', ts: now,
       status: { stage: 'running', pid: 21488, model: models[0].id, ctx: '128K', kv: 'q8_0',
         started_at: now - 640, ready_at: now - 615, stage_at: now - 640, error: '', warmup_ms: 23800, cmd: [],
         cmdline: 'llama-server.exe -m models\\big\\Qwen3-35B-A3B-Q6_K.gguf --mmproj ... -c 131072 -ngl 999 -ot exps=CPU -fa on -fit off -t 16 -b 2048 -ub 512 --cache-type-k q8_0 --cache-type-v q8_0 --cache-ram 8192 --spec-type draft-mtp --spec-draft-n-max 2 --reasoning on --reasoning-budget 512 --temp 0.7 --top-p 0.95 --top-k 20 --min-p 0.05 --presence-penalty 0.5 --repeat-penalty 1.08 --repeat-last-n 256 --dry-multiplier 0.8 --dry-base 1.75 --dry-allowed-length 2 --dry-penalty-last-n 512 --jinja --host 127.0.0.1 --port 8080 --metrics' },

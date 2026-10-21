@@ -707,8 +707,8 @@ def main():
     ap = argparse.ArgumentParser(description="LLMSwitch Studio")
     ap.add_argument("--port", type=int, default=None,
                     help="控制台 API 端口（默认用上次保存的端口，否则 %d）" % paths.DEFAULT_PORT)
-    ap.add_argument("--llama-port", type=int, default=paths.DEFAULT_LLAMA_PORT,
-                    help="llama-server 端口（客户端连的就是它）")
+    ap.add_argument("--llama-port", type=int, default=None,
+                    help="llama-server 端口（默认用上次保存的端口，否则 %d）" % paths.DEFAULT_LLAMA_PORT)
     ap.add_argument("--llama-dir", default="", help="llama.cpp 目录（含 llama-server.exe）")
     ap.add_argument("--serve", action="store_true", help="只起后端，不开窗口")
     ap.add_argument("--browser", action="store_true", help="用默认浏览器打开")
@@ -756,8 +756,16 @@ def main():
 
     boot_data(args.llama_dir)
 
-    mgr = server.Manager(port, args.llama_port)
-    monitor.set_port(args.llama_port)
+    llama_port = args.llama_port or config.STATE.get("llama_port") or paths.DEFAULT_LLAMA_PORT
+    try:
+        llama_port = int(llama_port)
+    except Exception:
+        llama_port = paths.DEFAULT_LLAMA_PORT
+    if not 1024 <= llama_port <= 65535:
+        llama_port = paths.DEFAULT_LLAMA_PORT
+
+    mgr = server.Manager(port, llama_port)
+    monitor.set_port(llama_port)
     token = secrets.token_urlsafe(18)
     try:
         with open(paths.RUNTIME_FILE, "w", encoding="utf-8") as f:
@@ -783,59 +791,6 @@ def main():
                              h or win.get("h") or MAIN_H)
 
     api.set_window_opener(_win)
-    console = {"httpd": httpd, "port": port}
-
-    def _switch_console(new_port):
-        try:
-            new_port = int(new_port)
-        except Exception:
-            return False, "端口无效"
-        if not 1024 <= new_port <= 65535:
-            return False, "端口需在 1024–65535 之间"
-        if new_port == console["port"]:
-            return True, ""
-        if not port_free(new_port):
-            return False, "端口 %d 已被占用" % new_port
-        try:
-            new_httpd = api.make_server(new_port, token, mgr)
-        except Exception as exc:                       # noqa: BLE001
-            return False, "无法监听 %d：%s" % (new_port, exc)
-        old = console["httpd"]
-        console["httpd"] = new_httpd
-        console["port"] = new_port
-        mgr.port = new_port
-        WINDOW_URL[0] = "http://127.0.0.1:%d/?t=%s" % (new_port, token)
-        try:
-            with open(paths.RUNTIME_FILE, "w", encoding="utf-8") as f:
-                json.dump({"port": new_port, "token": token, "pid": os.getpid()}, f)
-        except Exception:
-            pass
-        with config._lock:
-            config.STATE["console_port"] = new_port
-        config.save()
-        threading.Thread(target=new_httpd.serve_forever, daemon=True).start()
-
-        def _after():
-            time.sleep(0.7)
-            # 主窗口由页面自己跳转；悬浮窗没有端口输入框，由后端带过去。
-            mini = WEBVIEW["win"].get(paths.MINI_TITLE)
-            if mini is not None:
-                try:
-                    mini.load_url(WINDOW_URL[0] + "&mini=1")
-                except Exception as exc:               # noqa: BLE001
-                    config.log("port switch: mini reload failed %r" % (exc,))
-            time.sleep(1.4)
-            try:
-                old.shutdown()
-                old.server_close()
-            except Exception:
-                pass
-            config.log("console port -> %d" % new_port)
-
-        threading.Thread(target=_after, daemon=True).start()
-        return True, ""
-
-    api.set_console_switcher(_switch_console)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     threading.Thread(target=api.probe_loop, args=(mgr, stop_evt), daemon=True).start()
     config.log("http listening on %s:%d" % (paths.HOST, port))
@@ -879,8 +834,8 @@ def main():
     finally:
         stop_evt.set()
         try:
-            console["httpd"].shutdown()
-            console["httpd"].server_close()
+            httpd.shutdown()
+            httpd.server_close()
         except Exception:
             pass
         config.log("bye")

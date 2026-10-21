@@ -155,6 +155,7 @@ STATE = {
     "presets": {},         # {名字: {sampling:…, launch:…}} 用户预设
     "llama_dir": "",       # llama.cpp 目录（打包版必须记下来）
     "console_port": 0,     # 网页/API 端口（0 = 用默认值）
+    "llama_port": 0,       # llama-server 端口（0 = 用默认值）
     "ui": {"tab": "dashboard", "mini": False, "topmost": False},
     "window": {"x": None, "y": None, "w": 1280, "h": 880},
 }
@@ -362,6 +363,9 @@ def _coerce_state(d):
         cp = d.get("console_port")
         if isinstance(cp, (int, float)) and 1024 <= int(cp) <= 65535:
             STATE["console_port"] = int(cp)
+        lp = d.get("llama_port")
+        if isinstance(lp, (int, float)) and 1024 <= int(lp) <= 65535:
+            STATE["llama_port"] = int(lp)
         ui = d.get("ui")
         if isinstance(ui, dict):
             for k in ("tab",):

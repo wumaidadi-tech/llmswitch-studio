@@ -15,6 +15,7 @@ import json
 import mimetypes
 import os
 import re
+import socket
 import threading
 import time
 import urllib.request
@@ -23,7 +24,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import config, gguf, monitor, paths, server
 
-APP_VERSION = "2.1.2"
+APP_VERSION = "2.1.3"
 REPO_URL = "https://github.com/wumaidadi-tech/llmswitch-studio"
 RELEASES_API = "https://api.github.com/repos/wumaidadi-tech/llmswitch-studio/releases/latest"
 
@@ -47,7 +48,6 @@ _live_lock = threading.Lock()
 
 # 由 app.py 注入：打开主窗口 / 悬浮窗（迷你窗口）
 _window_opener = None
-_console_switcher = None
 
 
 def set_window_opener(fn):
@@ -55,9 +55,15 @@ def set_window_opener(fn):
     _window_opener = fn
 
 
-def set_console_switcher(fn):
-    global _console_switcher
-    _console_switcher = fn
+def _port_free(port):
+    s = socket.socket()
+    try:
+        s.bind((paths.HOST, int(port)))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
 
 
 # ==================== 检查更新 ====================
@@ -354,23 +360,37 @@ class Handler(BaseHTTPRequestHandler):
         p = u.path
         body = self._body()
         try:
-            if p == "/api/console-port":
+            if p == "/api/llama-port":
                 try:
                     new_port = int(body.get("port") or 0)
                 except Exception:
                     return self._json({"ok": False, "error": "端口无效"}, 400)
-                if _console_switcher is None:
-                    return self._json({"ok": False, "error": "当前模式不支持切换端口"}, 400)
-                ok, err = _console_switcher(new_port)
-                if not ok:
-                    return self._json({"ok": False, "error": err}, 400)
-                return self._json({
-                    "ok": True, "port": new_port,
-                    "url": "http://127.0.0.1:%d/?t=%s" % (new_port, self.token),
-                })
+                if not 1024 <= new_port <= 65535:
+                    return self._json({"ok": False, "error": "端口需在 1024–65535 之间"}, 400)
+                old_port = int(getattr(self.mgr, "llama_port", paths.DEFAULT_LLAMA_PORT))
+                if new_port == old_port:
+                    return self._json({"ok": True, "port": new_port, "previous": old_port,
+                                       "restarted": False})
+                if self.mgr.stage in ("starting", "stopping"):
+                    return self._json({"ok": False, "error": "服务正在启动/停止，请稍后再改端口"}, 400)
+                if not _port_free(new_port):
+                    return self._json({"ok": False, "error": "端口 %d 已被占用" % new_port}, 400)
+                with config._lock:
+                    config.STATE["llama_port"] = new_port
+                config.save()
+                self.mgr.llama_port = new_port
+                monitor.set_port(new_port)
+                restarted = False
+                if self.mgr.stage == "running":
+                    ok, _msg = self.mgr.restart(self.mgr.model_id)
+                    restarted = bool(ok)
+                return self._json({"ok": True, "port": new_port, "previous": old_port,
+                                   "restarted": restarted})
 
             if p == "/api/open-web":
-                url = "http://127.0.0.1:%d/?t=%s" % (self.mgr.port, self.token)
+                if self.mgr.stage not in ("starting", "running"):
+                    return self._json({"ok": False, "error": "llama-server 还没启动"}, 400)
+                url = "http://127.0.0.1:%d/" % int(self.mgr.llama_port)
                 try:
                     os.startfile(url)                     # noqa: S606
                 except Exception as exc:                  # noqa: BLE001

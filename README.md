@@ -39,8 +39,8 @@ Everything is local. No telemetry, no account, no cloud.
 - **Floating HUD** — a 320×112 always-on-top mini window: status, tok/s, VRAM, a context bar, and a
   click-to-switch model list. Start/stop is the small round button; expand and close are icons, so
   the window stays out of the way.
-- **Web console & live port** — the same UI is served on `127.0.0.1`; open it in your browser, or
-  switch the port in place (both windows reload automatically and the choice survives a restart).
+- **llama.cpp port & web UI** — change the llama-server port in **Runtime → llama-server API**; a running
+  server restarts on the new port. The globe button opens llama.cpp's own web UI.
 - **Update check** — menu → Check for updates compares your version with the latest GitHub release.
 - **Logs** — tail of `llama-server` output with error highlighting.
 - **Export** — copy the exact command line that was used, or export JSON / `.bat` / `.sh`.
@@ -174,8 +174,8 @@ Bound to `127.0.0.1` only; every `/api/*` call needs the token from `LLMSwitchDa
 | POST | `/api/presets` | `{"action":"save\|delete\|get","name":"…","cfg":{…}}` |
 | POST | `/api/window` | `{"mini":true,"topmost":true}` — open the floating HUD |
 | POST | `/api/settings` | `{"llama_dir":"D:\\llama.cpp"}` |
-| POST | `/api/open-web` | open the console in the default browser |
-| POST | `/api/console-port` | `{"port":8790}` — switch the console port in place |
+| POST | `/api/open-web` | open llama.cpp's web UI at the llama-server port |
+| POST | `/api/llama-port` | `{"port":8080}` — change the llama-server port (restarts it if running) |
 | POST | `/api/open-url` | open a project page (only the repository URL is accepted) |
 | GET | `/api/update` | latest GitHub release compared with the running version |
 

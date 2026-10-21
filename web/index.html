@@ -54,7 +54,7 @@
       </button>
       <button data-cmd="ports">
         <svg class="mi" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>
-        <span>服务与端口…</span>
+        <span>llama 端口…</span>
       </button>
       <button data-cmd="update">
         <svg class="mi" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
@@ -84,7 +84,7 @@
       <button class="btn ghost icon" id="btnFloat" title="打开悬浮窗">
         <svg viewBox="0 0 24 24" class="i"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="12" y="11" width="6" height="6" rx="1"/></svg>
       </button>
-      <button class="btn ghost icon" id="btnWeb" title="在浏览器中打开网页">
+      <button class="btn ghost icon" id="btnWeb" title="打开 llama.cpp 网页">
         <svg viewBox="0 0 24 24" class="i"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
       </button>
     </div>
@@ -94,8 +94,9 @@
 
     <div class="side-foot">
       <div class="foot-row"><span>显存</span><b id="footVram">—</b></div>
-      <div class="foot-row"><span>网页端口</span><b id="footConsolePort">—</b></div>
-      <div class="foot-row"><span>llama 端口</span><b id="footPort">8080</b></div>
+      <div class="foot-row link" id="footPortRow" title="点击修改 llama-server 端口">
+        <span>llama 端口</span><b id="footPort">8080</b>
+      </div>
       <div class="foot-hint">左键点模型即切换 · 悬浮窗可置顶显示</div>
     </div>
   </aside>
@@ -223,6 +224,24 @@
           </div>
         </div>
         <div class="grid runtime">
+          <div class="card span2 port-card">
+            <div class="card-h">
+              <div><h3>llama-server 接口</h3><p>客户端和 OpenAI SDK 连接的就是这个端口；运行中修改会重启一次服务</p></div>
+              <span class="tag" id="portStage">未运行</span>
+            </div>
+            <div class="port-row">
+              <label for="llamaPortInput">端口</label>
+              <div class="step port-step">
+                <button type="button" id="llamaPortMinus" aria-label="减少">−</button>
+                <input id="llamaPortInput" type="number" min="1024" max="65535" step="1"
+                       inputmode="numeric" autocomplete="off">
+                <button type="button" id="llamaPortPlus" aria-label="增加">+</button>
+              </div>
+              <button class="btn ghost" id="llamaPortOpen">打开网页</button>
+              <button class="btn primary" id="llamaPortApply">应用</button>
+              <span class="port-hint">仅监听 127.0.0.1 · 其它客户端要同步修改</span>
+            </div>
+          </div>
           <div class="card span2">
             <div class="card-h"><div><h3>显存规划</h3><p>KV 在启动时一次性预留，开大不会「用多少占多少」</p></div></div>
             <div class="budget-row">
@@ -343,28 +362,6 @@
       <input id="modalInput" class="modal-input" hidden placeholder="预设名称">
       <button class="btn ghost" id="modalCancel" hidden>取消</button>
       <button class="btn primary" id="modalOk">确定</button>
-    </div>
-  </div>
-</div>
-
-<div class="modal" id="portModal" hidden>
-  <div class="modal-card compact svc-card">
-    <div class="modal-h"><h3>服务与端口</h3>
-      <button class="btn icon ghost" data-close="portModal">✕</button></div>
-    <div class="svc-body">
-      <label class="svc-label" for="portInput">网页端口</label>
-      <div class="port-row">
-        <input id="portInput" class="modal-input port-input" type="number" min="1024" max="65535"
-               inputmode="numeric" autocomplete="off">
-        <button class="btn ghost" id="portOpenWeb">在浏览器打开</button>
-      </div>
-      <p class="svc-note">只监听 <code>127.0.0.1</code>，不对局域网开放。保存后窗口会自动重载；
-        llama.cpp 端口不受影响。</p>
-      <div class="svc-cur">当前地址 <code id="portAddr">127.0.0.1:—</code></div>
-    </div>
-    <div class="modal-f">
-      <button class="btn ghost" data-close="portModal">取消</button>
-      <button class="btn primary" id="portApply">保存并重载</button>
     </div>
   </div>
 </div>
