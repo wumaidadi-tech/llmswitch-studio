@@ -42,12 +42,28 @@
       <svg class="brand-caret" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
     </button>
 
-    <div class="popover glass" id="brandMenu" hidden>
-      <button data-cmd="home">概览</button>
-      <button data-cmd="float">打开悬浮窗</button>
-      <button data-cmd="logs">查看日志</button>
-      <button data-cmd="folder">打开数据目录</button>
-      <button data-cmd="about">关于与快捷键</button>
+    <div class="popover" id="brandMenu" hidden>
+      <div class="menu-head">
+        <b>LLMSwitch Studio</b>
+        <span id="menuMeta">v2 · 127.0.0.1:—</span>
+      </div>
+      <div class="menu-sep"></div>
+      <button data-cmd="folder">
+        <svg class="mi" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg>
+        <span>打开数据目录</span>
+      </button>
+      <button data-cmd="ports">
+        <svg class="mi" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>
+        <span>服务与端口…</span>
+      </button>
+      <button data-cmd="update">
+        <svg class="mi" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+        <span>检查更新</span>
+      </button>
+      <button data-cmd="about">
+        <svg class="mi" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="8" r=".6" fill="currentColor"/></svg>
+        <span>关于与快捷键</span>
+      </button>
     </div>
 
     <div class="status-hero">
@@ -68,6 +84,9 @@
       <button class="btn ghost icon" id="btnFloat" title="打开悬浮窗">
         <svg viewBox="0 0 24 24" class="i"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="12" y="11" width="6" height="6" rx="1"/></svg>
       </button>
+      <button class="btn ghost icon" id="btnWeb" title="在浏览器中打开网页">
+        <svg viewBox="0 0 24 24" class="i"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+      </button>
     </div>
 
     <div class="side-sep"><span>模型</span><b id="modelCount">0</b></div>
@@ -75,7 +94,8 @@
 
     <div class="side-foot">
       <div class="foot-row"><span>显存</span><b id="footVram">—</b></div>
-      <div class="foot-row"><span>服务端口</span><b id="footPort">8080</b></div>
+      <div class="foot-row"><span>网页端口</span><b id="footConsolePort">—</b></div>
+      <div class="foot-row"><span>llama 端口</span><b id="footPort">8080</b></div>
       <div class="foot-hint">左键点模型即切换 · 悬浮窗可置顶显示</div>
     </div>
   </aside>
@@ -315,7 +335,7 @@
 
 <!-- 通用弹窗：命令行 / 导出 / 预设命名 -->
 <div class="modal" id="modal" hidden>
-  <div class="modal-card glass" data-glass="hero">
+  <div class="modal-card">
     <div class="modal-h"><h3 id="modalTitle">标题</h3>
       <button class="btn icon ghost" id="modalClose">✕</button></div>
     <pre id="modalBody"></pre>
@@ -323,6 +343,70 @@
       <input id="modalInput" class="modal-input" hidden placeholder="预设名称">
       <button class="btn ghost" id="modalCancel" hidden>取消</button>
       <button class="btn primary" id="modalOk">确定</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="portModal" hidden>
+  <div class="modal-card compact svc-card">
+    <div class="modal-h"><h3>服务与端口</h3>
+      <button class="btn icon ghost" data-close="portModal">✕</button></div>
+    <div class="svc-body">
+      <label class="svc-label" for="portInput">网页端口</label>
+      <div class="port-row">
+        <input id="portInput" class="modal-input port-input" type="number" min="1024" max="65535"
+               inputmode="numeric" autocomplete="off">
+        <button class="btn ghost" id="portOpenWeb">在浏览器打开</button>
+      </div>
+      <p class="svc-note">只监听 <code>127.0.0.1</code>，不对局域网开放。保存后窗口会自动重载；
+        llama.cpp 端口不受影响。</p>
+      <div class="svc-cur">当前地址 <code id="portAddr">127.0.0.1:—</code></div>
+    </div>
+    <div class="modal-f">
+      <button class="btn ghost" data-close="portModal">取消</button>
+      <button class="btn primary" id="portApply">保存并重载</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="aboutModal" hidden>
+  <div class="modal-card about-card">
+    <div class="modal-h"><h3>关于</h3>
+      <button class="btn icon ghost" data-close="aboutModal">✕</button></div>
+    <div class="about-hero">
+      <img src="/icon.svg" alt="" class="about-icon">
+      <div><b>LLMSwitch Studio</b><span id="aboutVer">v2.1.2</span></div>
+    </div>
+    <p class="about-desc">把 llama.cpp 的 llama-server 包装成可切换、可调参、可观测的桌面控制台。
+      所有数据都留在本机。</p>
+    <div class="about-rows">
+      <div><span>数据目录</span><code id="aboutWork">—</code></div>
+      <div><span>llama.cpp</span><code id="aboutLlama">—</code></div>
+      <div><span>模型目录</span><code id="aboutModels">—</code></div>
+    </div>
+    <div class="about-keys">
+      <span><kbd>Alt</kbd><kbd>S</kbd> 启动 / 停止</span>
+      <span><kbd>Alt</kbd><kbd>R</kbd> 重启</span>
+      <span><kbd>Esc</kbd> 关闭弹窗</span>
+    </div>
+    <div class="modal-f">
+      <button class="btn ghost" id="aboutFolder">打开数据目录</button>
+      <button class="btn ghost" id="aboutUpdate">检查更新</button>
+      <button class="btn ghost" id="aboutGithub">GitHub</button>
+      <button class="btn primary" data-close="aboutModal">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="updateModal" hidden>
+  <div class="modal-card update-card">
+    <div class="modal-h"><h3 id="updateTitle">检查更新</h3>
+      <button class="btn icon ghost" data-close="updateModal">✕</button></div>
+    <div class="update-line" id="updateLine">正在检查…</div>
+    <pre class="update-notes" id="updateNotes" hidden></pre>
+    <div class="modal-f">
+      <button class="btn ghost" data-close="updateModal">关闭</button>
+      <button class="btn primary" id="updateOpen" hidden>打开发布页</button>
     </div>
   </div>
 </div>

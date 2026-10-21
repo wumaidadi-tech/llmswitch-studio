@@ -42,7 +42,14 @@
       delete o.json;
     }
     const r = await fetch(path + (path.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(TOKEN), o);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) {
+      let msg = 'HTTP ' + r.status;
+      try {
+        const d = await r.json();
+        if (d && d.error) msg = d.error;
+      } catch (_) { /* 非 JSON 错误就用状态码 */ }
+      throw new Error(msg);
+    }
     return r.json();
   }
 
@@ -166,6 +173,10 @@
     fp.title = 'llama-server: ' + (S.paths.llama_port || '') + ' · 控制台: ' + S.paths.port;
     $('#modelCount').textContent = S.models.length;
     $('#verTag').textContent = 'v' + S.version;
+    const cp = $('#footConsolePort');
+    if (cp) cp.textContent = S.paths.port;
+    const mm = $('#menuMeta');
+    if (mm) mm.textContent = 'v' + S.version + ' · 127.0.0.1:' + S.paths.port;
   }
 
   /* 悬浮窗：状态 / 模型 / 上下文三行，和主界面共用同一份 snapshot */
@@ -418,7 +429,7 @@
       budget: '思考',
       sampler_order: '采样链',
     };
-    $('#samplingFields').innerHTML = S.specs.sampling.map((sp) =>
+    $('#samplingFields').innerHTML = S.specs.sampling.filter((sp) => !sp.hidden).map((sp) =>
       (DIVS[sp.key] ? '<div class="fdiv"><span>' + DIVS[sp.key] + '</span></div>' : '')
       + fieldHtml(sp, draft.sampling[sp.key], 'sampling')).join('');
 
@@ -871,26 +882,110 @@
     });
   }
 
-  function aboutModal() {
-    const lines = [
-      'LLMSwitch Studio v' + (S ? S.version : '?'),
-      '',
-      '把 llama.cpp 的 llama-server 包装成可切换、可调参、可观测的桌面控制台。',
-      '',
-      '快捷键',
-      '  Alt+S   启动 / 停止',
-      '  Alt+R   重启',
-      '  Esc     关闭弹窗',
-      '',
-      '目录',
-      '  llama.cpp   ' + (S ? (S.paths.llama_dir || '未设置') : ''),
-      '  模型        ' + (S ? (S.paths.models_dir || '—') : ''),
-      '  日志        ' + (S ? (S.paths.log || '—') : ''),
-      '',
-      '界面由本地 HTTP 服务（仅 127.0.0.1）驱动，窗口只是它的浏览器外壳。',
-      '所有数据都留在本机。',
-    ].join('\n');
-    modal('关于', lines);
+  let releaseUrl = '';
+
+  function openWeb() {
+    if (DEMO) { toast('演示模式：不会真的打开浏览器', 'ok'); return; }
+    api('/api/open-web', { json: {} })
+      .then(() => toast('已在浏览器中打开', 'ok'))
+      .catch((e) => toast('打开失败：' + (e.message || e), 'err'));
+  }
+
+  function openDataDir() {
+    api('/api/reveal', { json: { target: 'work' } })
+      .then(() => toast('已打开数据目录', 'ok'))
+      .catch((e) => toast('打开失败：' + (e.message || e), 'err'));
+  }
+
+  function openPortModal() {
+    if (!S) return;
+    $('#portInput').value = S.paths.port || '';
+    $('#portAddr').textContent = '127.0.0.1:' + (S.paths.port || '—');
+    $('#portModal').hidden = false;
+    setTimeout(() => { const el = $('#portInput'); el.focus(); el.select(); }, 30);
+  }
+
+  async function applyPort() {
+    const port = parseInt($('#portInput').value, 10);
+    if (!(port >= 1024 && port <= 65535)) {
+      toast('端口需在 1024–65535 之间', 'err');
+      return;
+    }
+    if (!S) return;
+    if (port === S.paths.port) { $('#portModal').hidden = true; return; }
+    if (DEMO) {
+      S.paths.port = port;
+      $('#portModal').hidden = true;
+      renderTop();
+      toast('演示模式：端口已改为 ' + port, 'ok');
+      return;
+    }
+    try {
+      const d = await api('/api/console-port', { json: { port } });
+      toast('端口已切换到 ' + port + '，正在重载…', 'ok');
+      setTimeout(() => { location.href = d.url; }, 250);
+    } catch (e) {
+      toast('切换失败：' + (e.message || e), 'err');
+    }
+  }
+
+  function openAbout() {
+    if (!S) return;
+    $('#aboutVer').textContent = 'v' + S.version;
+    $('#aboutWork').textContent = S.paths.work_dir || '—';
+    $('#aboutLlama').textContent = S.paths.llama_dir || '未设置';
+    $('#aboutModels').textContent = S.paths.models_dir || '—';
+    $('#aboutModal').hidden = false;
+  }
+
+  function openGithub() {
+    if (DEMO) { toast('演示模式：不会打开浏览器', 'ok'); return; }
+    api('/api/open-url', { json: { url: 'https://github.com/wumaidadi-tech/llmswitch-studio' } })
+      .then(() => toast('已在浏览器中打开 GitHub', 'ok'))
+      .catch((e) => toast('打开失败：' + (e.message || e), 'err'));
+  }
+
+  async function checkUpdate() {
+    $('#updateModal').hidden = false;
+    $('#updateTitle').textContent = '检查更新';
+    $('#updateLine').textContent = '正在检查 GitHub…';
+    $('#updateNotes').hidden = true;
+    $('#updateNotes').textContent = '';
+    $('#updateOpen').hidden = true;
+    releaseUrl = '';
+    try {
+      const d = await api('/api/update');
+      if (!d.ok) {
+        $('#updateTitle').textContent = '检查失败';
+        $('#updateLine').textContent = d.error || '网络不可用，请稍后再试。';
+        return;
+      }
+      if (d.newer) {
+        $('#updateTitle').textContent = '发现新版本';
+        $('#updateLine').innerHTML = '当前 <b>v' + esc(d.current) + '</b> · 最新 <b>v' + esc(d.latest) + '</b>';
+        $('#updateNotes').textContent = (d.notes || '（这个版本没有发布说明）').trim();
+        $('#updateNotes').hidden = false;
+        releaseUrl = d.url || '';
+        $('#updateOpen').hidden = !releaseUrl;
+      } else if (d.latest && d.latest !== d.current) {
+        $('#updateTitle').textContent = '当前版本更高';
+        $('#updateLine').innerHTML = '本地 <b>v' + esc(d.current) + '</b> · GitHub 最新 <b>v' + esc(d.latest) + '</b>（开发版）';
+      } else {
+        $('#updateTitle').textContent = '已是最新版本';
+        $('#updateLine').innerHTML = '当前 <b>v' + esc(d.current) + '</b> · GitHub 上也是 <b>v' + esc(d.latest) + '</b>';
+      }
+    } catch (e) {
+      $('#updateTitle').textContent = '检查失败';
+      $('#updateLine').textContent = '无法连接 GitHub：' + (e.message || e);
+    }
+  }
+
+  function openRelease() {
+    if (!releaseUrl) return;
+    if (DEMO) { toast('演示模式：不会打开浏览器', 'ok'); return; }
+    api('/api/open-url', { json: { url: releaseUrl } })
+      .then(() => toast('已在浏览器中打开', 'ok'))
+      .catch((e) => toast('打开失败：' + (e.message || e), 'err'));
   }
 
   /* ---------------- 事件 ---------------- */
@@ -1116,11 +1211,31 @@
       $('#brandMenu').hidden = true;
       brand.setAttribute('aria-expanded', 'false');
       const cmd = b.dataset.cmd;
-      if (cmd === 'home') setTab('dashboard');
-      if (cmd === 'float') openFloat(true);
-      if (cmd === 'logs') setTab('logs');
-      if (cmd === 'folder') api('/api/reveal', { json: { target: 'work' } }).catch(() => {});
-      if (cmd === 'about') aboutModal();
+      if (cmd === 'folder') openDataDir();
+      if (cmd === 'ports') openPortModal();
+      if (cmd === 'update') checkUpdate();
+      if (cmd === 'about') openAbout();
+    });
+
+    $('#btnWeb').addEventListener('click', openWeb);
+    $('#portApply').addEventListener('click', applyPort);
+    $('#portOpenWeb').addEventListener('click', openWeb);
+    $('#portInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') applyPort(); });
+    $('#aboutFolder').addEventListener('click', openDataDir);
+    $('#aboutUpdate').addEventListener('click', () => { $('#aboutModal').hidden = true; checkUpdate(); });
+    $('#aboutGithub').addEventListener('click', openGithub);
+    $('#updateOpen').addEventListener('click', openRelease);
+    document.addEventListener('click', (ev) => {
+      const c = ev.target.closest('[data-close]');
+      if (c) {
+        const el = document.getElementById(c.dataset.close);
+        if (el) el.hidden = true;
+      }
+    });
+    ['portModal', 'aboutModal', 'updateModal'].forEach((id) => {
+      const m = document.getElementById(id);
+      if (!m) return;
+      m.addEventListener('click', (ev) => { if (ev.target.id === id) m.hidden = true; });
     });
 
     $('#modalClose').addEventListener('click', closeModal);
@@ -1146,7 +1261,13 @@
     document.addEventListener('keydown', (e) => {
       if (e.altKey && e.key.toLowerCase() === 's') { e.preventDefault(); toggleRun(); }
       if (e.altKey && e.key.toLowerCase() === 'r') { e.preventDefault(); $('#btnRestart').click(); }
-      if (e.key === 'Escape') { closeModal(); closeSel(); $('#brandMenu').hidden = true; }
+      if (e.key === 'Escape') {
+        closeModal(); closeSel(); $('#brandMenu').hidden = true;
+        ['portModal', 'aboutModal', 'updateModal'].forEach((id) => {
+          const m = document.getElementById(id);
+          if (m) m.hidden = true;
+        });
+      }
     });
 
     window.addEventListener('resize', () => {
@@ -1447,7 +1568,7 @@
       repeat_n: '256', dry_mult: '0.8', dry_base: '1.75', dry_len: '2', dry_n: '512', xtc_prob: '0',
       xtc_thresh: '0.1', typical_p: '1', budget: '512', seed: '-1', sampler_order: 'rec', sty: 'gen' };
     return {
-      ok: true, version: '2.1.1', ts: now,
+      ok: true, version: '2.1.2', ts: now,
       status: { stage: 'running', pid: 21488, model: models[0].id, ctx: '128K', kv: 'q8_0',
         started_at: now - 640, ready_at: now - 615, stage_at: now - 640, error: '', warmup_ms: 23800, cmd: [],
         cmdline: 'llama-server.exe -m models\\big\\Qwen3-35B-A3B-Q6_K.gguf --mmproj ... -c 131072 -ngl 999 -ot exps=CPU -fa on -fit off -t 16 -b 2048 -ub 512 --cache-type-k q8_0 --cache-type-v q8_0 --cache-ram 8192 --spec-type draft-mtp --spec-draft-n-max 2 --reasoning on --reasoning-budget 512 --temp 0.7 --top-p 0.95 --top-k 20 --min-p 0.05 --presence-penalty 0.5 --repeat-penalty 1.08 --repeat-last-n 256 --dry-multiplier 0.8 --dry-base 1.75 --dry-allowed-length 2 --dry-penalty-last-n 512 --jinja --host 127.0.0.1 --port 8080 --metrics' },
@@ -1486,8 +1607,8 @@
         { key: 'typical_p', label: 'Typical-P', kind: 'float', lo: 0, hi: 1, step: .01, hint: '局部典型性采样；1.0 = 关闭' },
         { key: 'budget', label: '思考预算', kind: 'int', lo: 0, hi: 8192, step: 1, hint: '思考链的 token 上限；0 = 不限' },
         { key: 'seed', label: '随机种子', kind: 'int', lo: -1, hi: 2147483647, step: 1, hint: '-1 = 每次随机' },
-        { key: 'sampler_order', label: '采样器顺序', kind: 'enum', options: [['rec', '推荐'], ['def', 'llama 默认']], hint: '推荐：惩罚与 DRY 放在温度之后' },
-        { key: 'sty', label: '采样风格', kind: 'enum', options: [['gen', '通用'], ['code', '代码'], ['prompt', '写提示词'], ['strict', '严谨']], hint: '一次套用一组采样值' },
+        { key: 'sampler_order', label: '采样器顺序', kind: 'enum', options: [['rec', '推荐'], ['def', 'llama 默认']], hint: '只决定采样器执行顺序，不套用参数值' },
+        { key: 'sty', label: '采样风格', kind: 'enum', hidden: true, options: [['gen', '通用'], ['code', '代码'], ['prompt', '写提示词'], ['strict', '严谨']], hint: '由上方预设控制' },
       ],
       launch: [
         { key: 'ctx', label: '上下文长度', kind: 'enum', options: [['auto', '自动'], ['8', '8K'], ['16', '16K'], ['32', '32K'], ['64', '64K'], ['128', '128K'], ['256', '256K']], hint: '启动时一次性预留 KV 显存' },

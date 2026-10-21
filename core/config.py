@@ -58,10 +58,12 @@ PARAM_SPECS = [
     # ---- 采样链 ----
     dict(key="sampler_order", label="采样器顺序", group="order", kind="enum", default="rec",
          options=[["rec", "推荐"], ["def", "llama 默认"]],
-         hint="推荐：惩罚与 DRY 放在温度之后，量化模型更不容易陷循环"),
-    dict(key="sty", label="采样风格", group="order", kind="enum", default="gen",
+         hint="只决定各个采样器的执行顺序，不会套用任何参数值。采样风格请用上方「预设」"),
+    # sty 只用于记录最后套用的风格（server 会据此调整代码场景的 DRY 长度），
+    # 界面上不再重复显示 —— 上方「预设」里的内置风格才是唯一的入口。
+    dict(key="sty", label="采样风格", group="order", kind="enum", default="gen", hidden=True,
          options=[["gen", "通用"], ["code", "代码"], ["prompt", "写提示词"], ["strict", "严谨"]],
-         hint="一次套用一组采样值（温度/惩罚等），套完还能逐项手改"),
+         hint="由上方「预设」控制"),
 ]
 
 SAMPLING_KEYS = [p["key"] for p in PARAM_SPECS]
@@ -152,6 +154,7 @@ STATE = {
     "models": {},          # {id: cfg}
     "presets": {},         # {名字: {sampling:…, launch:…}} 用户预设
     "llama_dir": "",       # llama.cpp 目录（打包版必须记下来）
+    "console_port": 0,     # 网页/API 端口（0 = 用默认值）
     "ui": {"tab": "dashboard", "mini": False, "topmost": False},
     "window": {"x": None, "y": None, "w": 1280, "h": 880},
 }
@@ -356,6 +359,9 @@ def _coerce_state(d):
         ld = d.get("llama_dir")
         if isinstance(ld, str):
             STATE["llama_dir"] = ld
+        cp = d.get("console_port")
+        if isinstance(cp, (int, float)) and 1024 <= int(cp) <= 65535:
+            STATE["console_port"] = int(cp)
         ui = d.get("ui")
         if isinstance(ui, dict):
             for k in ("tab",):

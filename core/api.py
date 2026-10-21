@@ -14,14 +14,18 @@
 import json
 import mimetypes
 import os
+import re
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import config, gguf, monitor, paths, server
 
-APP_VERSION = "2.1.1"
+APP_VERSION = "2.1.2"
+REPO_URL = "https://github.com/wumaidadi-tech/llmswitch-studio"
+RELEASES_API = "https://api.github.com/repos/wumaidadi-tech/llmswitch-studio/releases/latest"
 
 _live = {                       # 探测层最近一次读数（拿不到时保留旧值）
     "health": "down",
@@ -43,11 +47,61 @@ _live_lock = threading.Lock()
 
 # 由 app.py 注入：打开主窗口 / 悬浮窗（迷你窗口）
 _window_opener = None
+_console_switcher = None
 
 
 def set_window_opener(fn):
     global _window_opener
     _window_opener = fn
+
+
+def set_console_switcher(fn):
+    global _console_switcher
+    _console_switcher = fn
+
+
+# ==================== 检查更新 ====================
+_update_cache = {"at": 0.0, "data": None}
+_update_lock = threading.Lock()
+
+
+def _version_key(v):
+    nums = [int(x) for x in re.findall(r"\d+", v or "")][:3]
+    return tuple(nums + [0] * (3 - len(nums)))
+
+
+def check_update():
+    now = time.time()
+    with _update_lock:
+        cached = _update_cache["data"]
+        if cached and now - _update_cache["at"] < 300:
+            return cached
+    try:
+        req = urllib.request.Request(
+            RELEASES_API,
+            headers={"Accept": "application/vnd.github+json",
+                     "User-Agent": "LLMSwitchStudio/" + APP_VERSION},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            d = json.load(resp)
+        latest = (d.get("tag_name") or "").lstrip("v")
+        out = {
+            "ok": True,
+            "current": APP_VERSION,
+            "latest": latest,
+            "newer": _version_key(latest) > _version_key(APP_VERSION),
+            "name": d.get("name") or ("v" + latest),
+            "url": d.get("html_url") or (REPO_URL + "/releases"),
+            "published": d.get("published_at") or "",
+            "notes": (d.get("body") or "")[:6000],
+        }
+        with _update_lock:
+            _update_cache["at"] = now
+            _update_cache["data"] = out
+        return out
+    except Exception as exc:                           # noqa: BLE001
+        return {"ok": False, "current": APP_VERSION, "error": str(exc),
+                "url": REPO_URL + "/releases"}
 
 
 # ==================== 探测循环 ====================
@@ -174,7 +228,8 @@ def snapshot(mgr):
                   "styles": list(config.STYLES.keys()),
                   "style_labels": config.STYLE_LABELS},
         "paths": {"llama_dir": paths.LLAMA_DIR, "models_dir": paths.MODELS_DIR,
-                  "log": paths.LOG_FILE, "port": mgr.port,
+                  "log": paths.LOG_FILE, "work_dir": paths.WORK_DIR,
+                  "port": mgr.port,
                   "llama_port": getattr(mgr, "llama_port", paths.DEFAULT_LLAMA_PORT),
                   "exe": paths.LLAMA_EXE, "frozen": paths.FROZEN},
         "presets": config.list_presets(),
@@ -278,6 +333,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "llama_dir": paths.LLAMA_DIR,
                                    "models_dir": paths.MODELS_DIR,
                                    "work_dir": paths.WORK_DIR, "frozen": paths.FROZEN})
+            if p == "/api/update":
+                return self._json(check_update())
             if p == "/api/export":
                 fmt = (q.get("format") or ["bat"])[0]
                 return self._json(self._export(fmt))
@@ -297,6 +354,39 @@ class Handler(BaseHTTPRequestHandler):
         p = u.path
         body = self._body()
         try:
+            if p == "/api/console-port":
+                try:
+                    new_port = int(body.get("port") or 0)
+                except Exception:
+                    return self._json({"ok": False, "error": "端口无效"}, 400)
+                if _console_switcher is None:
+                    return self._json({"ok": False, "error": "当前模式不支持切换端口"}, 400)
+                ok, err = _console_switcher(new_port)
+                if not ok:
+                    return self._json({"ok": False, "error": err}, 400)
+                return self._json({
+                    "ok": True, "port": new_port,
+                    "url": "http://127.0.0.1:%d/?t=%s" % (new_port, self.token),
+                })
+
+            if p == "/api/open-web":
+                url = "http://127.0.0.1:%d/?t=%s" % (self.mgr.port, self.token)
+                try:
+                    os.startfile(url)                     # noqa: S606
+                except Exception as exc:                  # noqa: BLE001
+                    return self._json({"ok": False, "error": str(exc)}, 500)
+                return self._json({"ok": True, "url": url})
+
+            if p == "/api/open-url":
+                url = str(body.get("url") or "")
+                if not (url == REPO_URL or url.startswith(REPO_URL + "/")):
+                    return self._json({"ok": False, "error": "只允许打开项目页面"}, 400)
+                try:
+                    os.startfile(url)                     # noqa: S606
+                except Exception as exc:                  # noqa: BLE001
+                    return self._json({"ok": False, "error": str(exc)}, 500)
+                return self._json({"ok": True})
+
             if p == "/api/select":
                 mid = body.get("id")
                 if not config.model_entry(mid):

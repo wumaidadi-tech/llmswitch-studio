@@ -382,3 +382,23 @@ Electron 是几十 MB 的额外运行时。`--app` 方案一个 `Popen` 就够�
   Edge 无头渲染成 1024px 透明 PNG，再用 Pillow 生成 16/24/32/48/64/128/256 的
   `assets/app.ico`；`build_exe.py --icon` 嵌进 exe，窗口和任务栏直接读它。
   网页端用同一个 SVG 做 favicon，侧栏 brand 用内联图形保持 16px 下的清晰度。
+
+### 7.7 v2.1.2：采样去重、菜单、端口热切换与更新检查
+
+- **采样页去重**：原来的「采样风格」下拉和上方预设 chips 说的是同一件事，而且下拉只改
+  `sty` 字段、不会套用那一组参数。给 spec 加 `hidden=True`，前端渲染时过滤掉；后台仍保留
+  `sty`（`server.py` 用它给代码风格调整 DRY 允许长度）。界面只留「采样器顺序」，并在提示里
+  写明它只决定执行顺序，不改变任何采样值。
+- **侧栏菜单**：去掉概览 / 打开悬浮窗 / 查看日志（都有更直接的入口），改为数据目录、
+  服务与端口、检查更新、关于。菜单与弹窗改接近实色的深底（不再叠玻璃折射），小字号和标题
+  不会再被背景糊掉；全局 `[hidden]{display:none!important}` 修掉 `.btn` 的 `display` 覆盖
+  `hidden` 属性导致按钮该藏没藏的问题。
+- **端口热切换**：`console_port` 存进 `state.json`，启动时如果没有显式 `--port` 就用上次的；
+  `POST /api/console-port` 先在空闲端口建第二个 HTTP server，更新 `runtime.json`、状态和
+  `mgr.port`，主窗口由页面自己 `location` 跳转、悬浮窗由后端 `load_url`，2 秒后关闭旧 server。
+  非法端口、被占用端口在服务端拒绝；端口被别的程序占用时启动会顺延找空闲端口。
+- **打开网页 / 检查更新**：`/api/open-web` 用默认浏览器打开带 token 的本机页面；
+  `/api/update` 拉 GitHub `releases/latest`（10 分钟缓存）并比较版本；`/api/open-url` 只允许
+  打开本项目仓库地址，避免变成任意 URL 启动器。
+- **实测**：8781 → 8791 → 8781，主窗口和悬浮窗都跟着跳，旧端口关闭，`state`/`runtime`
+  持久化，重启沿用；非法端口 80/99999 与陌生 URL 均被 400 拒绝；全程无 JS 异常。

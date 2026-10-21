@@ -213,6 +213,16 @@ def port_free(port):
         s.close()
 
 
+def saved_console_port():
+    """上一次运行用的网页端口；读不到就用默认值。"""
+    try:
+        with open(paths.STATE_FILE, encoding="utf-8") as f:
+            p = int(json.load(f).get("console_port") or 0)
+        return p if 1024 <= p <= 65535 else 0
+    except Exception:
+        return 0
+
+
 # ==================== 窗口 ====================
 def _MATCH_CLASS(cls):
     """窗口类名白名单：Edge --app 与 pywebview(WebView2) 两种宿主都认。"""
@@ -695,7 +705,8 @@ def boot_data(cli_dir=""):
 
 def main():
     ap = argparse.ArgumentParser(description="LLMSwitch Studio")
-    ap.add_argument("--port", type=int, default=paths.DEFAULT_PORT, help="控制台 API 端口")
+    ap.add_argument("--port", type=int, default=None,
+                    help="控制台 API 端口（默认用上次保存的端口，否则 %d）" % paths.DEFAULT_PORT)
     ap.add_argument("--llama-port", type=int, default=paths.DEFAULT_LLAMA_PORT,
                     help="llama-server 端口（客户端连的就是它）")
     ap.add_argument("--llama-dir", default="", help="llama.cpp 目录（含 llama-server.exe）")
@@ -714,34 +725,51 @@ def main():
     if not args.console and not paths.FROZEN:
         hide_console()
 
-    # 单实例：端口已占 → 只把窗口叫出来
-    if not port_free(args.port):
+    port = args.port or saved_console_port() or paths.DEFAULT_PORT
+    if not 1024 <= port <= 65535:
+        port = paths.DEFAULT_PORT
+
+    # 单实例：端口已占 → 只把窗口叫出来。若占用者不是本程序（runtime.json
+    # 对不上），就顺延找一个空闲端口，避免把别的服务当成自己的 UI 打开。
+    if not port_free(port):
+        rt = {}
+        rt_ok = False
         try:
             with open(paths.RUNTIME_FILE, encoding="utf-8") as f:
                 rt = json.load(f)
-            url = "http://127.0.0.1:%d/?t=%s" % (args.port, rt.get("token", ""))
+            rt_ok = int(rt.get("port") or 0) == port
         except Exception:
-            url = "http://127.0.0.1:%d/" % args.port
-        config.log("another instance on port %d, opening window only" % args.port)
-        open_window(url, args.mini, args.topmost)
-        return 0
+            rt = {}
+        if rt_ok:
+            url = "http://127.0.0.1:%d/?t=%s" % (port, rt.get("token", ""))
+            config.log("another instance on port %d, opening window only" % port)
+            open_window(url, args.mini, args.topmost)
+            return 0
+        for p in range(port + 1, min(port + 30, 65536)):
+            if port_free(p):
+                config.log("port %d is used by another app; using %d" % (port, p))
+                port = p
+                break
+        else:
+            config.log("no free console port near %d" % port)
+            return 1
 
     boot_data(args.llama_dir)
 
-    mgr = server.Manager(args.port, args.llama_port)
+    mgr = server.Manager(port, args.llama_port)
     monitor.set_port(args.llama_port)
     token = secrets.token_urlsafe(18)
     try:
         with open(paths.RUNTIME_FILE, "w", encoding="utf-8") as f:
-            json.dump({"port": args.port, "token": token, "pid": os.getpid()}, f)
+            json.dump({"port": port, "token": token, "pid": os.getpid()}, f)
     except Exception:
         pass
 
     win = config.STATE.get("window") or {}
-    base_url = "http://127.0.0.1:%d/?t=%s" % (args.port, token)
+    base_url = "http://127.0.0.1:%d/?t=%s" % (port, token)
 
     stop_evt = threading.Event()
-    httpd = api.make_server(args.port, token, mgr)
+    httpd = api.make_server(port, token, mgr)
 
     WINDOW_URL[0] = base_url
 
@@ -755,9 +783,62 @@ def main():
                              h or win.get("h") or MAIN_H)
 
     api.set_window_opener(_win)
+    console = {"httpd": httpd, "port": port}
+
+    def _switch_console(new_port):
+        try:
+            new_port = int(new_port)
+        except Exception:
+            return False, "端口无效"
+        if not 1024 <= new_port <= 65535:
+            return False, "端口需在 1024–65535 之间"
+        if new_port == console["port"]:
+            return True, ""
+        if not port_free(new_port):
+            return False, "端口 %d 已被占用" % new_port
+        try:
+            new_httpd = api.make_server(new_port, token, mgr)
+        except Exception as exc:                       # noqa: BLE001
+            return False, "无法监听 %d：%s" % (new_port, exc)
+        old = console["httpd"]
+        console["httpd"] = new_httpd
+        console["port"] = new_port
+        mgr.port = new_port
+        WINDOW_URL[0] = "http://127.0.0.1:%d/?t=%s" % (new_port, token)
+        try:
+            with open(paths.RUNTIME_FILE, "w", encoding="utf-8") as f:
+                json.dump({"port": new_port, "token": token, "pid": os.getpid()}, f)
+        except Exception:
+            pass
+        with config._lock:
+            config.STATE["console_port"] = new_port
+        config.save()
+        threading.Thread(target=new_httpd.serve_forever, daemon=True).start()
+
+        def _after():
+            time.sleep(0.7)
+            # 主窗口由页面自己跳转；悬浮窗没有端口输入框，由后端带过去。
+            mini = WEBVIEW["win"].get(paths.MINI_TITLE)
+            if mini is not None:
+                try:
+                    mini.load_url(WINDOW_URL[0] + "&mini=1")
+                except Exception as exc:               # noqa: BLE001
+                    config.log("port switch: mini reload failed %r" % (exc,))
+            time.sleep(1.4)
+            try:
+                old.shutdown()
+                old.server_close()
+            except Exception:
+                pass
+            config.log("console port -> %d" % new_port)
+
+        threading.Thread(target=_after, daemon=True).start()
+        return True, ""
+
+    api.set_console_switcher(_switch_console)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     threading.Thread(target=api.probe_loop, args=(mgr, stop_evt), daemon=True).start()
-    config.log("http listening on %s:%d" % (paths.HOST, args.port))
+    config.log("http listening on %s:%d" % (paths.HOST, port))
 
     url = base_url + ("&mini=1" if args.mini else "")
     use_wv = False
@@ -798,7 +879,8 @@ def main():
     finally:
         stop_evt.set()
         try:
-            httpd.shutdown()
+            console["httpd"].shutdown()
+            console["httpd"].server_close()
         except Exception:
             pass
         config.log("bye")

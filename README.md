@@ -33,11 +33,15 @@ Everything is local. No telemetry, no account, no cloud.
 - **VRAM & CUDA panel** — `-ngl`, `-ot`, `-fa`, `-fit`, `-t`, `-b`, `-ub`, `--cache-ram`, `--keep`,
   `--no-kv-offload`, `--moe-cache-mib`, speculative decoding, KV cache type — all editable, with a
   live budget bar (used / needed / free).
-- **Sampling panel** — 18 parameters with sliders + steppers, four built-in styles
+- **Sampling panel** — 17 parameters with sliders + steppers, four built-in styles
   (general / code / prompt-writing / strict), and **your own presets** (save a whole parameter set under a name).
+  The sampler-order switch is separate: it changes execution order, not the preset values.
 - **Floating HUD** — a 320×112 always-on-top mini window: status, tok/s, VRAM, a context bar, and a
   click-to-switch model list. Start/stop is the small round button; expand and close are icons, so
   the window stays out of the way.
+- **Web console & live port** — the same UI is served on `127.0.0.1`; open it in your browser, or
+  switch the port in place (both windows reload automatically and the choice survives a restart).
+- **Update check** — menu → Check for updates compares your version with the latest GitHub release.
 - **Logs** — tail of `llama-server` output with error highlighting.
 - **Export** — copy the exact command line that was used, or export JSON / `.bat` / `.sh`.
 - **Local API** — every action is a JSON call on `127.0.0.1` with a random per-session token.
@@ -170,6 +174,10 @@ Bound to `127.0.0.1` only; every `/api/*` call needs the token from `LLMSwitchDa
 | POST | `/api/presets` | `{"action":"save\|delete\|get","name":"…","cfg":{…}}` |
 | POST | `/api/window` | `{"mini":true,"topmost":true}` — open the floating HUD |
 | POST | `/api/settings` | `{"llama_dir":"D:\\llama.cpp"}` |
+| POST | `/api/open-web` | open the console in the default browser |
+| POST | `/api/console-port` | `{"port":8790}` — switch the console port in place |
+| POST | `/api/open-url` | open a project page (only the repository URL is accepted) |
+| GET | `/api/update` | latest GitHub release compared with the running version |
 
 A model id is the path relative to the llama.cpp folder, e.g.
 `models\my-model\Qwen3-35B-A3B-Q4_K_M.gguf`.
