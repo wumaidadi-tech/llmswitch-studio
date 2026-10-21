@@ -28,8 +28,9 @@
   let undoStack = [];          // 启动参数的回退栈（只存本地草稿，不落盘）
   let restoreDismissed = false;
   let lastDiag = null;         // 最近一次诊断结果（复制用）
-  let clientTargets = null;    // /api/clients 的结果（写入客户端用）
-  let clientTargetsTried = false;
+  let clientTargets = null;    // /api/clients 的结果（接入向导用）
+  let clientBase = '';
+  let clientModel = '';
 
   if (MINI) {
     document.body.classList.add('mini');
@@ -780,27 +781,63 @@
     renderLoras();
   }
 
-  function ensureClientTargets() {
-    if (DEMO || clientTargets || clientTargetsTried) return;
-    clientTargetsTried = true;
-    api('/api/clients').then((d) => {
+  function ensureClientTargets(force) {
+    if (DEMO || (clientTargets && !force)) return Promise.resolve();
+    return api('/api/clients').then((d) => {
       clientTargets = d.targets || [];
-      renderClientWrite();
+      clientBase = d.base_url || '';
+      clientModel = d.model || '';
+      renderWizard();
     }).catch(() => { /* 老后端没有这个接口时静默 */ });
   }
 
-  function renderClientWrite() {
-    const box = $('#clientWrite');
+  // 品牌图标：Claude / Codex / dotenv / JSON 来自 LobeHub 与 Simple Icons 的官方标志集
+  // （web/icons/*.svg，随程序打包）。WorkBuddy 没有公开标志，用它自己的开关标。
+  const WIZ_LOGOS = {
+    workbuddy: '/icons/workbuddy.png',
+    claude: '/icons/claude.svg',
+    codex: '/icons/codex.svg',
+    env: '/icons/dotenv.svg',
+    json: '/icons/json.svg',
+  };
+
+  /* 接入向导：真正的 agent 逐行列；给脚本用的 .env / JSON 收在底部一行 */
+  function renderWizard() {
+    const box = $('#clientWizard');
     if (!box || !clientTargets) return;
-    const html = clientTargets.map((t) => {
-      const short = t.id === 'env' ? '写入 .env' : t.id === 'json' ? '写入 client.json'
-        : ('写入 ' + t.name);
-      const label = t.writable ? short : t.name;
-      return '<button class="btn mini ghost" data-write="' + esc(t.id) + '"'
-        + (t.writable ? '' : ' disabled')
-        + ' title="' + esc((t.writable ? '写入 ' : '不直接改：') + t.path
-          + (t.note ? ' · ' + t.note : '')) + '">' + esc(label) + '</button>';
-    }).join('');
+    const tag = $('#wizBase');
+    if (tag) tag.textContent = clientModel ? (clientModel + ' · ' + clientBase) : '—';
+
+    const primary = clientTargets.filter((t) => t.id !== 'env' && t.id !== 'json');
+    const extra = clientTargets.filter((t) => t.id === 'env' || t.id === 'json');
+
+    const row = (t) => {
+      const st = t.configured ? '<span class="tag run">已接入</span>'
+        : (t.installed ? '<span class="tag">未接入</span>' : '<span class="tag">未检测到</span>');
+      const btn = t.configured ? '重写' : '写入';
+      const cur = t.current ? (' · 当前 ' + t.current) : '';
+      const logo = WIZ_LOGOS[t.id] || '/icon.svg';
+      return '<div class="wiz-row' + (t.configured ? ' on' : '') + '" data-id="' + esc(t.id) + '">'
+        + '<span class="wz-ico ' + esc(t.id) + '"><img src="' + logo + '" alt=""></span>'
+        + '<div class="wz-main">'
+        + '<div class="wz-name">' + esc(t.name) + st + '</div>'
+        + '<div class="wz-gain">' + esc(t.gain || '') + '</div>'
+        + '<div class="wz-path" title="' + esc(t.path + (t.note ? ' · ' + t.note : '')) + '">'
+        + esc(t.path) + esc(cur) + '</div></div>'
+        + '<button class="btn mini ' + (t.configured ? 'ghost' : 'primary') + '" data-write="'
+        + esc(t.id) + '" title="' + esc(t.note || '') + '">' + btn + '</button>'
+        + '</div>';
+    };
+
+    const extraHtml = extra.length
+      ? '<div class="wiz-extra"><span>给脚本 / 没列出来的 agent：</span>'
+        + extra.map((t) => '<button class="btn mini ghost" data-write="' + esc(t.id) + '" title="'
+            + esc(t.path + ' · ' + (t.note || '')) + '">'
+            + (t.id === 'env' ? '导出 .env' : '导出 client.json')
+            + (t.configured ? ' ✓' : '') + '</button>').join('') + '</div>'
+      : '';
+
+    const html = primary.map(row).join('') + extraHtml;
     if (box.dataset.sig !== html) { box.innerHTML = html; box.dataset.sig = html; }
   }
 
@@ -811,7 +848,8 @@
     const model = c.model || 'local-model';
     const key = c.api_key || '123456';
     const payload = JSON.stringify({ model: model, messages: [{ role: 'user', content: '你好' }] });
-    const curl = 'curl ' + base + '/chat/completions -H "Content-Type: application/json" -d \'' + payload + '\'';
+    const curl = 'curl ' + base + '/chat/completions -H "Content-Type: application/json" -d \''
+      + payload + '\'';
     const py = [
       'from openai import OpenAI',
       '',
@@ -1576,7 +1614,7 @@
     });
     if (cc) cc.addEventListener('click', () => {});
     $('#btnClientTest').addEventListener('click', testClient);
-    $('#clientWrite').addEventListener('click', async (ev) => {
+    $('#clientWizard').addEventListener('click', async (ev) => {
       const b = ev.target.closest('[data-write]');
       if (!b || b.disabled) return;
       if (DEMO) { toast('演示模式：不会写文件', 'ok'); return; }
@@ -1585,10 +1623,11 @@
         const d = await api('/api/client-write', { json: { id: b.dataset.write } });
         if (d.ok) toast(d.msg + (d.backup ? ' · 原文件已备份' : ''), 'ok');
         else toast(d.msg || '写入失败', 'err');
+        await ensureClientTargets(true);
       } catch (e) {
         toast('写入失败：' + e.message, 'err');
       } finally {
-        setTimeout(() => { b.disabled = false; }, 900);
+        b.disabled = false;
       }
     });
 

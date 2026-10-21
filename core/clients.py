@@ -60,27 +60,101 @@ def _quote(s):
     return json.dumps(str(s), ensure_ascii=False)
 
 
-def targets():
+def _json_read(path, default):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def _wb_state(path, model, base_url):
+    data = _json_read(path, None)
+    if not isinstance(data, list):
+        return False, "还没写过"
+    hit = next((it for it in data if isinstance(it, dict) and it.get("id") == model), None)
+    if not hit:
+        return False, "配置里没有「%s」" % model
+    cur = str(hit.get("url") or "")
+    return cur.startswith(base_url.rstrip("/")), cur
+
+
+def _claude_state(path, base_url):
+    data = _json_read(path, None)
+    if not isinstance(data, dict):
+        return False, "还没写过"
+    cur = str(((data.get("env") or {}) if isinstance(data.get("env"), dict) else {})
+              .get("ANTHROPIC_BASE_URL") or "")
+    return (bool(cur) and cur.rstrip("/") == _root(base_url)), cur
+
+
+def _codex_state(path, base_url):
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except Exception:
+        return False, "还没写过"
+    top = re.search(r'^model_provider\s*=\s*"([^"]+)"', text, re.M)
+    base = re.search(r"\[model_providers\.%s\][\s\S]*?base_url\s*=\s*\"([^\"]+)\"" %
+                     re.escape(PROVIDER), text)
+    if not top or top.group(1) != PROVIDER:
+        return False, "当前 provider 不是 %s" % PROVIDER
+    cur = base.group(1) if base else ""
+    return (bool(cur) and cur.startswith(base_url.rstrip("/"))), cur
+
+
+def _file_state(path, base_url):
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except Exception:
+        return False, "还没生成"
+    return base_url.rstrip("/").split("//")[-1].split("/")[0] in text, "已生成"
+
+
+def targets(model="", base_url=""):
     wb = _home(".workbuddy", "models.json")
     claude = _home(".claude", "settings.json")
     codex = _home(".codex", "config.toml")
-    return [
+    env_path = os.path.join(paths.WORK_DIR, "client.env")
+    json_path = os.path.join(paths.WORK_DIR, "client.json")
+    rows = [
         {"id": "workbuddy", "name": "WorkBuddy", "path": wb, "writable": True,
          "installed": os.path.isfile(wb),
+         "gain": "WorkBuddy 的自定义模型里直接出现「%s」" % (model or "当前模型"),
          "note": "按模型 id 合并 models.json；不认识的字段原样保留"},
         {"id": "claude", "name": "Claude Code", "path": claude, "writable": True,
          "installed": os.path.isfile(claude),
-         "note": "只改 settings.json 的 env（BASE_URL / AUTH_TOKEN / 模型名）"},
+         "gain": "终端里敲 claude 就直连本地（走 /v1/messages，不花 API 钱）",
+         "note": "只改 settings.json 的 env：BASE_URL / AUTH_TOKEN / 模型名"},
         {"id": "codex", "name": "Codex CLI", "path": codex, "writable": True,
          "installed": os.path.isfile(codex),
-         "note": "写 [model_providers.llama-local] 并把当前 provider 指过去；cc-switch 切换时会覆盖回来"},
-        {"id": "env", "name": "通用 .env", "path": os.path.join(paths.WORK_DIR, "client.env"),
-         "writable": True, "installed": True,
-         "note": "OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL，脚本可直接读"},
-        {"id": "json", "name": "通用 client.json", "path": os.path.join(paths.WORK_DIR, "client.json"),
-         "writable": True, "installed": True,
-         "note": "给读 JSON 的 agent / 自写脚本用"},
+         "gain": "codex 默认改用本地模型（wire_api=chat）",
+         "note": "写 [model_providers.llama-local] 并把当前 provider 指过去；cc-switch 切供应商会覆盖回来"},
+        {"id": "env", "name": "通用 .env", "path": env_path, "writable": True,
+         "installed": True,
+         "gain": "任何脚本 source 一下就能用（OPENAI_* 与 ANTHROPIC_* 都有）",
+         "note": "写在数据目录，不影响系统环境变量"},
+        {"id": "json", "name": "通用 client.json", "path": json_path, "writable": True,
+         "installed": True,
+         "gain": "给读 JSON 配置的 agent / 自己写的脚本",
+         "note": "写在数据目录"},
     ]
+    if base_url:
+        detect = {"workbuddy": lambda p: _wb_state(p, model, base_url),
+                  "claude": lambda p: _claude_state(p, base_url),
+                  "codex": lambda p: _codex_state(p, base_url),
+                  "env": lambda p: _file_state(p, base_url),
+                  "json": lambda p: _file_state(p, base_url)}
+        for r in rows:
+            ok, cur = detect[r["id"]](r["path"])
+            r["configured"] = bool(ok)
+            r["current"] = cur
+    else:
+        for r in rows:
+            r["configured"] = False
+            r["current"] = ""
+    return rows
 
 
 # ==================== WorkBuddy ====================

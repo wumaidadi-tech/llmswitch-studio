@@ -24,7 +24,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import autostart, clients, config, diagnose, gguf, monitor, paths, server
 
-APP_VERSION = "2.3.1"
+APP_VERSION = "2.3.2"
 REPO_URL = "https://github.com/wumaidadi-tech/llmswitch-studio"
 RELEASES_API = "https://api.github.com/repos/wumaidadi-tech/llmswitch-studio/releases/latest"
 
@@ -424,7 +424,12 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/diagnose":
                 return self._json(diagnose.run(self.mgr))
             if p == "/api/clients":
-                return self._json({"ok": True, "targets": clients.targets()})
+                cfg = config.get_cfg()
+                port = int(getattr(self.mgr, "llama_port", paths.DEFAULT_LLAMA_PORT))
+                base = "http://127.0.0.1:%d/v1" % port
+                model = (cfg.get("launch") or {}).get("alias") or "local-model"
+                return self._json({"ok": True, "base_url": base, "model": model,
+                                   "targets": clients.targets(model, base)})
             if p == "/api/export":
                 fmt = (q.get("format") or ["bat"])[0]
                 return self._json(self._export(fmt))

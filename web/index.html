@@ -334,7 +334,6 @@
               <button class="btn mini ghost" data-copy="py">复制 Python</button>
             </div>
             <div class="client-hint" id="clientHint">API Key 随便填（本地不校验）· 服务没启动时连不上</div>
-            <div class="client-actions" id="clientWrite"></div>
             <pre class="client-code" id="clientCode"></pre>
           </div>
 
@@ -367,6 +366,15 @@
                 <p class="life-desc">上次退出时服务在运行，下次打开本程序会自动拉起同一个模型（加载期间界面显示启动中）。</p>
               </div>
             </div>
+          </div>
+
+          <div class="card span2" id="wizardCard">
+            <div class="card-h">
+              <div><h3>接入向导</h3><p>把当前模型写进其它客户端 · 只改必要键，写前自动备份</p></div>
+              <span class="tag" id="wizBase">—</span>
+            </div>
+            <div class="wiz" id="clientWizard"></div>
+            <div class="wiz-foot">写入后 Claude Code / Codex 要重开终端；Codex 的 provider 会被 cc-switch 切回去，这是正常的。</div>
           </div>
 
           <div class="card span2" id="bootCard">
