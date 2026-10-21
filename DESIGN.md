@@ -132,7 +132,7 @@ Electron 是几十 MB 的额外运行时。`--app` 方案一个 `Popen` 就够�
    新增参数只改一处；每模型独立配置；风格四档；导出 JSON / .bat / .sh；
    非法值在写入前收敛（`dry_n` 负数、`np` 非 auto 都要拦）。
 6. **共存与迁移**：首启动只读旧 `llm_switch.json` 导入（保留手工调过的 `ctx/kv`），
-   随后写自己的 `v2/.workbuddy/state.json`；磁盘上消失的模型配置自动清理。
+   随后写自己的 `v2/LLMSwitchData/state.json`；磁盘上消失的模型配置自动清理。
 
 ### 2.4 安全与稳定性
 
@@ -370,5 +370,15 @@ Electron 是几十 MB 的额外运行时。`--app` 方案一个 `Popen` 就够�
 - 单文件 exe 12.0 MB；从项目外的普通目录启动后 `/healthz` 200，打包版悬浮窗同样是
   CSS 320×112 / 物理 480×168，无裁切。
 - 实测坑：产物留在仓库内 `dist/` 时会被安全软件静默拦截（进程退出码 -1、连
-  `.workbuddy/app.log` 都来不及写）；同一份文件复制到普通目录就能正常运行。这是
+  `LLMSwitchData/app.log` 都来不及写）；同一份文件复制到普通目录就能正常运行。这是
   目录级拦截，不是包损坏，发布给用户从 GitHub 下载不受影响。
+
+### 7.6 v2.1.1：数据目录与应用图标
+
+- **数据目录改名**：`.workbuddy/` → `LLMSwitchData/`，不再带工具品牌名。
+  `paths.ensure_dirs()` 在 `config.load()` 之前检查新目录有没有 `state.json`；
+  没有就从旧的 `.workbuddy/` 复制一份，旧目录不删。日志、Edge 配置也随目录一起换。
+- **应用图标**：`web/icon.svg` 是主稿（玻璃开关 + 薄荷色滑块，和界面同一套极光色）。
+  Edge 无头渲染成 1024px 透明 PNG，再用 Pillow 生成 16/24/32/48/64/128/256 的
+  `assets/app.ico`；`build_exe.py --icon` 嵌进 exe，窗口和任务栏直接读它。
+  网页端用同一个 SVG 做 favicon，侧栏 brand 用内联图形保持 16px 下的清晰度。

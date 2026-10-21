@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="140" y1="80" x2="900" y2="960" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#122036"/>
+      <stop offset="0.55" stop-color="#0b1220"/>
+      <stop offset="1" stop-color="#070a12"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="0" cy="0" r="1" gradientTransform="translate(238 140) rotate(34) scale(620)">
+      <stop offset="0" stop-color="#7dd3fc" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#7dd3fc" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="0" cy="0" r="1" gradientTransform="translate(836 892) rotate(-150) scale(600)">
+      <stop offset="0" stop-color="#a78bfa" stop-opacity="0.36"/>
+      <stop offset="1" stop-color="#a78bfa" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="track" x1="190" y1="372" x2="850" y2="652" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.09"/>
+    </linearGradient>
+    <linearGradient id="mint" x1="590" y1="430" x2="752" y2="596" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#a7f8d6"/>
+      <stop offset="0.5" stop-color="#4ce3a4"/>
+      <stop offset="1" stop-color="#2fc98a"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="180" y1="80" x2="840" y2="960" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.12"/>
+    </linearGradient>
+    <filter id="soft" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="26"/>
+    </filter>
+    <clipPath id="squircle">
+      <rect x="32" y="32" width="960" height="960" rx="232"/>
+    </clipPath>
+  </defs>
+
+  <rect x="32" y="32" width="960" height="960" rx="232" fill="url(#bg)"/>
+  <g clip-path="url(#squircle)">
+    <rect x="32" y="32" width="960" height="960" fill="url(#glowA)"/>
+    <rect x="32" y="32" width="960" height="960" fill="url(#glowB)"/>
+    <circle cx="512" cy="512" r="330" fill="#3ddc97" opacity="0.11" filter="url(#soft)"/>
+  </g>
+  <rect x="38" y="38" width="948" height="948" rx="226" fill="none" stroke="url(#rim)" stroke-width="7"/>
+
+  <g transform="rotate(-12 512 512)">
+    <rect x="192" y="362" width="640" height="300" rx="150" fill="url(#track)" stroke="#ffffff" stroke-opacity="0.52" stroke-width="8"/>
+    <rect x="204" y="374" width="616" height="276" rx="138" fill="none" stroke="#ffffff" stroke-opacity="0.12" stroke-width="3"/>
+    <circle cx="330" cy="512" r="24" fill="#7dd3fc" opacity="0.8"/>
+    <circle cx="700" cy="512" r="138" fill="#3ddc97" opacity="0.26" filter="url(#soft)"/>
+    <circle cx="700" cy="512" r="108" fill="url(#mint)"/>
+    <circle cx="700" cy="512" r="108" fill="none" stroke="#ffffff" stroke-opacity="0.55" stroke-width="4"/>
+    <ellipse cx="668" cy="478" rx="43" ry="27" fill="#ffffff" opacity="0.42" transform="rotate(-28 668 478)"/>
+  </g>
+</svg>

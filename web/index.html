@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LLMSwitch Studio</title>
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<meta name="theme-color" content="#0a0f18">
 <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
@@ -27,7 +29,11 @@
     <button class="brand" id="brandBtn" title="打开菜单">
       <span class="brand-mark">
         <span class="pulse"></span>
-        <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h10M4 17h7"/></svg>
+        <svg viewBox="0 0 24 24" class="brand-glyph" aria-hidden="true">
+          <rect class="bg-track" x="2.1" y="7.1" width="19.8" height="9.8" rx="4.9"/>
+          <circle class="bg-pin" cx="9.3" cy="12" r="1.5"/>
+          <circle class="bg-knob" cx="16.6" cy="12" r="3.2"/>
+        </svg>
       </span>
       <span class="brand-txt">
         <b>LLMSwitch</b>

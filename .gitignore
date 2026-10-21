@@ -4,6 +4,7 @@ build/
 *.spec
 
 # local state / logs / edge profile
+LLMSwitchData/
 .workbuddy/
 *.log
 crash.log

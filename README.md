@@ -142,7 +142,7 @@ All state lives next to the executable (portable), or in `%LOCALAPPDATA%\LLMSwit
 is read-only:
 
 ```
-.workbuddy/
+LLMSwitchData/
   state.json        # per-model parameters, presets, window position
   app.log           # what the app did
   llama-server.log  # llama.cpp output
@@ -150,10 +150,12 @@ is read-only:
 ```
 
 `state.json` is plain JSON — back it up or copy it between machines.
+Upgrading from v2.1.0 or older? The first run copies `state.json` from the old
+`.workbuddy/` folder automatically; the old folder is left untouched.
 
 ## HTTP API
 
-Bound to `127.0.0.1` only; every `/api/*` call needs the token from `.workbuddy/runtime.json`
+Bound to `127.0.0.1` only; every `/api/*` call needs the token from `LLMSwitchData/runtime.json`
 (`X-Token` header or `?t=`).
 
 | Method | Path | Purpose |

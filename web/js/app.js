@@ -1447,7 +1447,7 @@
       repeat_n: '256', dry_mult: '0.8', dry_base: '1.75', dry_len: '2', dry_n: '512', xtc_prob: '0',
       xtc_thresh: '0.1', typical_p: '1', budget: '512', seed: '-1', sampler_order: 'rec', sty: 'gen' };
     return {
-      ok: true, version: '2.1.0', ts: now,
+      ok: true, version: '2.1.1', ts: now,
       status: { stage: 'running', pid: 21488, model: models[0].id, ctx: '128K', kv: 'q8_0',
         started_at: now - 640, ready_at: now - 615, stage_at: now - 640, error: '', warmup_ms: 23800, cmd: [],
         cmdline: 'llama-server.exe -m models\\big\\Qwen3-35B-A3B-Q6_K.gguf --mmproj ... -c 131072 -ngl 999 -ot exps=CPU -fa on -fit off -t 16 -b 2048 -ub 512 --cache-type-k q8_0 --cache-type-v q8_0 --cache-ram 8192 --spec-type draft-mtp --spec-draft-n-max 2 --reasoning on --reasoning-budget 512 --temp 0.7 --top-p 0.95 --top-k 20 --min-p 0.05 --presence-penalty 0.5 --repeat-penalty 1.08 --repeat-last-n 256 --dry-multiplier 0.8 --dry-base 1.75 --dry-allowed-length 2 --dry-penalty-last-n 512 --jinja --host 127.0.0.1 --port 8080 --metrics' },

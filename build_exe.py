@@ -51,10 +51,12 @@ args = [
     "--onefile" if ONEFILE else "--onedir",
     "--noconsole",
     "--name", NAME,
+    "--icon", os.path.join(HERE, "assets", "app.ico"),
     "--distpath", TMPD,
     "--workpath", TMPW,
     "--specpath", TMPW,
     "--add-data", os.path.join(HERE, "web") + os.pathsep + "web",
+    "--add-data", os.path.join(HERE, "assets") + os.pathsep + "assets",
     # pywebview 的 WebView2 互操作 DLL 在 webview/lib 下，作为 **数据文件** 打包；
     # pywebview 在 frozen 状态会按 webview.__file__/lib 去找，所以相对路径必须保留。
     "--collect-all", "webview",

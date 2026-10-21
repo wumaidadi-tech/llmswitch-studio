@@ -49,9 +49,8 @@ if not defined PYWV (
   if not defined PY call :probe_wv "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
   if not defined PY call :probe_wv "%ProgramFiles%\Python313\python.exe"
   if not defined PY call :probe_wv "E:/ComfyUI-aki-v3.2/python/python.exe"
-  REM virtualenvs kept next to the project, and the Python bundled with WorkBuddy/Qoder
+  REM virtualenvs kept next to the project
   if not defined PY call :probe_wv "%~dp0.venv\Scripts\python.exe"
-  if not defined PY call :probe_wv "%USERPROFILE%\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
   if not defined PY set "PY=!PY0!"
 )
 

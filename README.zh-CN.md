@@ -133,7 +133,7 @@ python build_exe.py --out D:\apps    # 自定义输出目录
 状态默认放在程序旁边（便携），目录不可写时退回 `%LOCALAPPDATA%\LLMSwitch`：
 
 ```
-.workbuddy/
+LLMSwitchData/
   state.json        # 每模型参数、预设、窗口位置
   app.log           # 程序自己的操作日志
   llama-server.log  # llama.cpp 输出
@@ -141,10 +141,12 @@ python build_exe.py --out D:\apps    # 自定义输出目录
 ```
 
 `state.json` 就是普通 JSON，可以直接备份或搬到别的机器。
+从 v2.1.0 及更早版本升级时，第一次启动会自动把旧 `.workbuddy/` 里的
+`state.json` 复制过来，旧目录保持原样。
 
 ## HTTP 接口
 
-只绑定 `127.0.0.1`，所有 `/api/*` 需要 `.workbuddy/runtime.json` 里的 token
+只绑定 `127.0.0.1`，所有 `/api/*` 需要 `LLMSwitchData/runtime.json` 里的 token
 （`X-Token` 头或 `?t=`）。
 
 | 方法 | 路径 | 用途 |

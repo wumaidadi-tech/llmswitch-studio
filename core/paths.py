@@ -5,15 +5,18 @@
   · 源码运行：BASE = LLMSwitch/v2，WEB_DIR = BASE/web
   · 打包 exe ：BASE = exe 所在目录（便携），WEB_DIR = PyInstaller 解包目录里的 web/
 
-用户数据（状态、日志、Edge 配置）优先放在 BASE/.workbuddy（便携版拷走即用），
-目录不可写时退回 %LOCALAPPDATA%\\LLMSwitch。
+用户数据（状态、日志、Edge 配置）优先放在 BASE/LLMSwitchData（便携版拷走即用），
+目录不可写时退回 %LOCALAPPDATA%\\LLMSwitch。旧版的 .workbuddy 目录只在升级后
+第一次运行时用来迁移 state.json，不会删除原目录。
 llama.cpp 目录在运行期由 resolve_llama_dir() 决定，不再写死任何本机路径。
 """
 import os
+import shutil
 import sys
 
 FROZEN = bool(getattr(sys, "frozen", False))
 BUNDLE = getattr(sys, "_MEIPASS", "") if FROZEN else ""
+DATA_DIR = "LLMSwitchData"
 
 if FROZEN:
     BASE = os.path.dirname(os.path.abspath(sys.executable))
@@ -39,7 +42,7 @@ def _writable(d):
 
 
 def _pick_work_dir():
-    local = os.path.join(BASE, ".workbuddy")
+    local = os.path.join(BASE, DATA_DIR)
     if _writable(local):
         return local
     alt = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "LLMSwitch")
@@ -54,8 +57,30 @@ APP_LOG = os.path.join(WORK_DIR, "app.log")               # 本程序操作日�
 RUNTIME_FILE = os.path.join(WORK_DIR, "runtime.json")     # 端口/token，供外部脚本读取
 EDGE_PROFILE = os.path.join(WORK_DIR, "edge-profile")     # Edge app 模式的独立配置目录
 
+# 旧版数据目录（v2.1.0 及更早）。只拷 state.json，旧目录原样保留。
+LEGACY_WORK_DIRS = [
+    os.path.join(BASE, ".workbuddy"),
+    os.path.join(SWITCH, ".workbuddy"),
+]
+
+
+def _migrate_work_dir():
+    if os.path.exists(STATE_FILE):
+        return None
+    for old_dir in LEGACY_WORK_DIRS:
+        old = os.path.join(old_dir, "state.json")
+        if os.path.isfile(old):
+            try:
+                shutil.copy2(old, STATE_FILE)
+                return old
+            except OSError:
+                pass
+    return None
+
 # 旧版（v1 悬浮窗）状态文件可能在这些位置，迁移时逐个试
 LEGACY_STATES = [
+    os.path.join(BASE, DATA_DIR, "llm_switch.json"),
+    os.path.join(SWITCH, DATA_DIR, "llm_switch.json"),
     os.path.join(SWITCH, ".workbuddy", "llm_switch.json"),
     os.path.join(BASE, ".workbuddy", "llm_switch.json"),
     os.path.join(BASE, "llm_switch.json"),
@@ -139,3 +164,4 @@ def set_llama_dir(d):
 
 def ensure_dirs():
     os.makedirs(WORK_DIR, exist_ok=True)
+    _migrate_work_dir()
