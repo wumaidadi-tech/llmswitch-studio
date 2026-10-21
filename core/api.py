@@ -22,9 +22,9 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import config, gguf, monitor, paths, server
+from . import config, diagnose, gguf, monitor, paths, server
 
-APP_VERSION = "2.1.3"
+APP_VERSION = "2.2.0"
 REPO_URL = "https://github.com/wumaidadi-tech/llmswitch-studio"
 RELEASES_API = "https://api.github.com/repos/wumaidadi-tech/llmswitch-studio/releases/latest"
 
@@ -43,6 +43,8 @@ _live = {                       # 探测层最近一次读数（拿不到时保�
     "build_info": "",
     "n_ctx": 0,
     "total_slots": 0,
+    "sleeping": False,
+    "metrics_ok": False,
 }
 _live_lock = threading.Lock()
 
@@ -115,25 +117,37 @@ def probe_loop(mgr, stop_evt):
     last_gpu = 0.0
     last_heavy = 0.0
     tps_prev = None
+    prev_stage = None
+    prev_tokens = None
     while not stop_evt.is_set():
         try:
             now = time.time()
             st = mgr.status()
+            # 记住"上次退出时在不在跑"，供下次启动恢复。
+            # ⚠️ 只在真正发生过状态迁移时写：新进程第一眼就是 stopped，
+            # 若无条件写 False，会把上次留下"在跑"的记录抹掉，自动恢复永远不触发。
+            if st["stage"] != prev_stage:
+                if st["stage"] in ("running", "starting"):
+                    config.set_last_running(True, st.get("model"))
+                elif st["stage"] == "stopped" and prev_stage in ("running", "starting", "stopping"):
+                    config.set_last_running(False)
+                prev_stage = st["stage"]
             if now - last_gpu > 2.0:
                 monitor.gpu_info()
                 last_gpu = now
             if st["stage"] in ("starting", "running", "stopping"):
                 h = monitor.health()
-                used, cap, _sl = monitor.slots()
+                heavy = (now - last_heavy) > 2.5
+                m = p = None
+                if heavy:
+                    m = monitor.metrics()
+                    p = monitor.props()
+                    last_heavy = now
                 with _live_lock:
                     _live["health"] = h
-                    if used is not None:
-                        _live["ctx_used"] = used
-                    if cap:
-                        _live["ctx_cap"] = cap
-                    if now - last_heavy > 3.0:
-                        m = monitor.metrics()
+                    if heavy:
                         if m:
+                            _live["metrics_ok"] = True
                             _live["prefill_tps"] = round(m.get("prompt_tokens_seconds", 0.0), 1)
                             _live["tps"] = round(m.get("predicted_tokens_seconds", 0.0), 1)
                             _live["req_processing"] = int(m.get("requests_processing", 0))
@@ -143,18 +157,41 @@ def probe_loop(mgr, stop_evt):
                             _live["prompt_tokens"] = int(m.get("prompt_tokens_total", 0))
                             _live["predicted_tokens"] = int(m.get("tokens_predicted_total", 0))
                         else:                      # 没开 --metrics 时退回日志解析
+                            _live["metrics_ok"] = False
                             t = monitor.log_stats()
                             if t:
                                 _live["tps"] = round(t, 1)
-                        p = monitor.props()
                         if p:
                             _live["build_info"] = str(p.get("build_info") or "")
                             _live["total_slots"] = int(p.get("total_slots") or 0)
+                            _live["sleeping"] = bool(p.get("is_sleeping"))
                             ds = p.get("default_generation_settings") or {}
                             nc = ds.get("n_ctx")
-                            if isinstance(nc, int):
+                            if isinstance(nc, int) and nc > 0:
                                 _live["n_ctx"] = nc
-                        last_heavy = now
+                    busy = _live["req_processing"] > 0
+                    sleeping = _live["sleeping"]
+                    toks = _live["prompt_tokens"] + _live["predicted_tokens"]
+                    metrics_ok = _live["metrics_ok"]
+
+                if st["stage"] == "running" and not sleeping:
+                    if busy or (prev_tokens is not None and toks != prev_tokens):
+                        mgr.touch_activity()
+                    prev_tokens = toks
+
+                # ⚠️ /slots 会重置 llama.cpp 的空闲计时（实测：只轮询 /slots 时永不休眠），
+                # 所以只在"确实有请求在处理"或刚活跃 30 秒内才问它。求上下文占用
+                # 靠 /props 的 n_ctx 兜底；没开 --metrics 时退回原来的每秒轮询。
+                sleep_on = bool((config.STATE.get("lifecycle") or {}).get("idle_sleep"))
+                want_slots = (not sleeping) and (
+                    busy or (now - mgr.last_activity) < 30 or (not metrics_ok and not sleep_on))
+                if want_slots:
+                    used, cap, _sl = monitor.slots()
+                    with _live_lock:
+                        if used is not None:
+                            _live["ctx_used"] = used
+                        if cap:
+                            _live["ctx_cap"] = cap
                 monitor.HIST.push([int(now), monitor.GD.get("used", 0),
                                    _live["tps"], _live["ctx_used"]])
             else:
@@ -163,6 +200,7 @@ def probe_loop(mgr, stop_evt):
                     _live["tps"] = 0.0
                     _live["req_processing"] = 0
                     _live["ctx_cap"] = 0
+                    _live["sleeping"] = False
         except Exception as exc:                        # noqa: BLE001
             config.log("probe error %r" % (exc,))
         stop_evt.wait(1.0)
@@ -192,6 +230,8 @@ def _model_public(entry):
         "n_expert": n_expert,
         "n_ctx_train": meta.get("n_ctx_train") or 0,
         "error": meta.get("error") or "",
+        "loras": [{"name": x["name"], "size": x["size"], "path": x["path"]}
+                  for x in (entry.get("loras") or [])],
     }
 
 
@@ -214,10 +254,15 @@ def snapshot(mgr):
         models.append(d)
     live["history"] = monitor.HIST.dump()
     live["gpu"] = g
+    # 空闲休眠时我们不去问 /slots（会重置计时），容量从 /props 的 n_ctx 兜底
+    if not live.get("ctx_cap") and live.get("n_ctx"):
+        live["ctx_cap"] = live["n_ctx"]
     spec_rate = 0.0
     if live["spec_draft"] > 0:
         spec_rate = round(100.0 * live["spec_accepted"] / live["spec_draft"], 1)
     live["spec_rate"] = spec_rate
+    llama_port = int(getattr(mgr, "llama_port", paths.DEFAULT_LLAMA_PORT))
+    alias = (cfg.get("launch") or {}).get("alias") or "local-model"
     return {
         "ok": True,
         "version": APP_VERSION,
@@ -238,6 +283,15 @@ def snapshot(mgr):
                   "port": mgr.port,
                   "llama_port": getattr(mgr, "llama_port", paths.DEFAULT_LLAMA_PORT),
                   "exe": paths.LLAMA_EXE, "frozen": paths.FROZEN},
+        "client": {
+            "base_url": "http://127.0.0.1:%d/v1" % llama_port,
+            "chat_url": "http://127.0.0.1:%d/v1/chat/completions" % llama_port,
+            "root": "http://127.0.0.1:%d/" % llama_port,
+            "model": alias,
+            "api_key": "123456",
+            "wake_url": "http://127.0.0.1:%d/wake?t=<runtime.json 里的 token>" % mgr.port,
+        },
+        "lifecycle": config.lifecycle(),
         "presets": config.list_presets(),
         "setup": {"needs_llama_dir": not bool(paths.LLAMA_DIR)},
         "ui": config.STATE.get("ui", {}),
@@ -318,6 +372,16 @@ class Handler(BaseHTTPRequestHandler):
         p = u.path
         if p == "/healthz":
             return self._json({"ok": True})
+        if p == "/wake":
+            # 给脚本/客户端用的「按需唤醒」：GET /wake?t=<token>
+            # token 在 LLMSwitchData/runtime.json 里，每次启动都会换。
+            if not self._authed(q):
+                return self._json({"ok": False, "error": "unauthorized"}, 401)
+            st = self.mgr.status()
+            if st["stage"] in ("running", "starting"):
+                return self._json({"ok": True, "already": True, "status": st})
+            ok, msg = self.mgr.start(self.mgr.model_id or config.STATE.get("model"))
+            return self._json({"ok": bool(ok), "msg": msg, "status": self.mgr.status()})
         if p.startswith("/api/") and not self._authed(q):
             return self._json({"ok": False, "error": "unauthorized"}, 401)
         try:
@@ -341,6 +405,8 @@ class Handler(BaseHTTPRequestHandler):
                                    "work_dir": paths.WORK_DIR, "frozen": paths.FROZEN})
             if p == "/api/update":
                 return self._json(check_update())
+            if p == "/api/diagnose":
+                return self._json(diagnose.run(self.mgr))
             if p == "/api/export":
                 fmt = (q.get("format") or ["bat"])[0]
                 return self._json(self._export(fmt))
@@ -430,6 +496,37 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     return self._json({"ok": False, "error": "unknown action"}, 400)
                 return self._json({"ok": ok, "msg": msg, "status": self.mgr.status()})
+
+            if p == "/api/wake":
+                st = self.mgr.status()
+                if st["stage"] in ("running", "starting"):
+                    return self._json({"ok": True, "already": True, "status": st})
+                ok, msg = self.mgr.start(self.mgr.model_id or config.STATE.get("model"))
+                return self._json({"ok": bool(ok), "msg": msg, "status": self.mgr.status()})
+
+            if p == "/api/lifecycle":
+                before = config.lifecycle()
+                fields = {k: body[k] for k in ("idle_sleep", "idle_minutes", "restore_launch")
+                          if k in body}
+                lc = config.set_lifecycle(**fields) if fields else before
+                changed = (bool(before.get("idle_sleep")) != bool(lc.get("idle_sleep"))
+                           or int(before.get("idle_minutes") or 0) != int(lc.get("idle_minutes") or 0))
+                return self._json({"ok": True, "lifecycle": lc,
+                                   "needs_restart": bool(changed and self.mgr.stage == "running")})
+
+            if p == "/api/client-test":
+                port = int(getattr(self.mgr, "llama_port", 0) or 0)
+                ok, d = monitor.http_json("/v1/models", timeout=5, port=port)
+                models = []
+                if ok and isinstance(d, dict):
+                    models = [m.get("id") for m in (d.get("data") or [])
+                              if isinstance(m, dict)]
+                return self._json({
+                    "ok": bool(ok),
+                    "models": models,
+                    "error": "" if ok else "连不上 llama-server：服务没启动，或端口不是 %d" % port,
+                    "url": "http://127.0.0.1:%d/v1/models" % port,
+                })
 
             if p == "/api/config":
                 mid = body.get("id") or config.STATE.get("model")

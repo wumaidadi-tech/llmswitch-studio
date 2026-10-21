@@ -766,6 +766,19 @@ def main():
 
     mgr = server.Manager(port, llama_port)
     monitor.set_port(llama_port)
+    # 关窗口不会杀掉 llama-server（它是独立进程）。重开程序时如果端口上已经有
+    # 一个健康的服务，就认领它 —— 否则界面显示"已停止"但显存被占着，再点启动还会撞端口。
+    try:
+        if monitor.health() == "ok":
+            pr = monitor.props() or {}
+            alias = (config.get_cfg().get("launch") or {}).get("alias")
+            if not alias or (pr.get("model_alias") or alias) == alias:
+                nc = int(((pr.get("default_generation_settings") or {}).get("n_ctx") or 0))
+                mgr._set("running", pid=None, model_id=config.STATE.get("model"),
+                         ctx=("%dK" % (nc // 1024)) if nc else "", kv="")
+                config.log("adopted existing llama-server on port %d" % llama_port)
+    except Exception as exc:                           # noqa: BLE001
+        config.log("adopt check failed %r" % (exc,))
     token = secrets.token_urlsafe(18)
     try:
         with open(paths.RUNTIME_FILE, "w", encoding="utf-8") as f:
@@ -781,6 +794,9 @@ def main():
 
     WINDOW_URL[0] = base_url
 
+    # 先读一次「上次是否在跑」，再启动探测线程（探测线程会写这个字段）
+    lc = config.lifecycle()
+
     def _win(action, mini, topmost, w, h):
         # 主窗口的保存尺寸只用于主窗口；悬浮窗必须用自己的 320×112，
         # 否则会被主窗口的 w/h 覆盖成整屏大小（已实测）。
@@ -794,6 +810,20 @@ def main():
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     threading.Thread(target=api.probe_loop, args=(mgr, stop_evt), daemon=True).start()
     config.log("http listening on %s:%d" % (paths.HOST, port))
+
+    # 恢复上次的运行状态（LM Studio 的做法：退出时在跑，下次打开自动拉起）
+    if lc.get("restore_launch") and lc.get("last_running"):
+        def _restore_last():
+            time.sleep(1.5)
+            if mgr.stage in ("running", "starting"):
+                return
+            if monitor.health() == "ok":       # 上次的进程还活着，不用再拉一个
+                config.log("restore: server already healthy, skip")
+                return
+            config.log("restore last session -> start %s" % config.STATE.get("model"))
+            mgr.start(config.STATE.get("model"))
+            config.set_last_running(True, config.STATE.get("model"))
+        threading.Thread(target=_restore_last, daemon=True).start()
 
     url = base_url + ("&mini=1" if args.mini else "")
     use_wv = False

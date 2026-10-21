@@ -75,10 +75,13 @@ class Manager:
         self.warmup_ms = 0
         self.pending_model = None
         self.thread = None
+        self.last_activity = 0.0     # 最近一次检测到请求的时间（悬停显示 + 空闲休眠）
+        self.auto_unloaded = False   # 是否因为空闲被自动卸载/休眠
 
     # ---------- 对外快照 ----------
     def status(self):
         with self.lock:
+            idle = (time.time() - self.last_activity) if self.last_activity else 0
             return {
                 "stage": self.stage,
                 "pid": self.pid,
@@ -94,7 +97,16 @@ class Manager:
                 "cmdline": " ".join(esc_bat(a) for a in self.cmd),
                 "port": self.port,
                 "llama_port": self.llama_port,
+                "last_activity": int(self.last_activity),
+                "idle_secs": int(idle),
+                "auto_unloaded": self.auto_unloaded,
             }
+
+    def touch_activity(self):
+        with self.lock:
+            self.last_activity = time.time()
+            if self.auto_unloaded:
+                self.auto_unloaded = False
 
     def _set(self, stage, **kw):
         with self.lock:
@@ -179,6 +191,40 @@ class Manager:
         if str(sam.get("seed", "-1")) not in ("", "-1"):
             cmd += ["--seed", str(sam["seed"])]
 
+        # LoRA / 适配器：路径用相对 llama.cpp 目录的形式，避免 Windows 盘符里的冒号
+        # 与 --lora-scaled 的 "FNAME:SCALE" 分隔符冲突。
+        for lo in (lau.get("loras") or []):
+            if not lo.get("on"):
+                continue
+            p = str(lo.get("path") or "")
+            if not p or not os.path.isfile(p):
+                config.log("lora skipped (missing): %s" % p)
+                continue
+            try:
+                relp = os.path.relpath(p, paths.LLAMA_DIR)
+            except Exception:
+                relp = p
+            if ":" in relp:                     # 跨盘符才退回绝对路径
+                relp = p
+            try:
+                sc = float(lo.get("scale") or 1)
+            except Exception:
+                sc = 1.0
+            if abs(sc - 1.0) < 1e-6:
+                cmd += ["--lora", relp]
+            else:
+                cmd += ["--lora-scaled", "%s:%s" % (relp, ("%.2f" % sc).rstrip("0").rstrip("."))]
+
+        # 空闲休眠：llama.cpp 原生能力，醒来时按需重新加载模型，客户端无感
+        lc = config.STATE.get("lifecycle") or {}
+        if lc.get("idle_sleep"):
+            try:
+                secs = int(float(lc.get("idle_minutes") or 15) * 60)
+            except Exception:
+                secs = 900
+            if secs >= 30:
+                cmd += ["--sleep-idle-seconds", str(secs)]
+
         cmd += ["--jinja", "--host", paths.HOST, "--port", str(self.llama_port)]
         if entry.get("mmproj") and lau["mmproj"]:
             cmd += ["--image-min-tokens", "1024"]
@@ -198,6 +244,8 @@ class Manager:
             self.stage_at = time.time()
             self.error = ""
             self.warmup_ms = 0
+            self.auto_unloaded = False
+            self.last_activity = time.time()
             self.pending_model = model_id or config.STATE.get("model")
         t = threading.Thread(target=self._boot, args=(self.pending_model,), daemon=True)
         t.start()
@@ -271,6 +319,7 @@ class Manager:
             self.ready_at = time.time()
             self.stage = "running"
             self.stage_at = time.time()
+            self.last_activity = time.time()
         config.log("running pid=%s load=%.1fs" % (proc.pid, self.ready_at - self.started_at))
         self._warmup()
 

@@ -417,3 +417,72 @@ Electron 是几十 MB 的额外运行时。`--app` 方案一个 `Popen` 就够�
 - 端口输入复用其它数字参数的 `.step` 组件（− / 输入框 / +），不再出现浏览器原生的小箭头。
 - 实测：8081 → 8083 保存后重启沿用；占用端口 8770 与非法值被拒；停止时打开网页提示
   “llama-server 还没启动”；悬浮窗仍为 320×112；全程无 JS 异常。
+
+## 八、v2.2：空闲休眠、LoRA、客户端接入与启动诊断
+
+版本号从 2.1.3 → **2.2.0**。这一轮补的全是"日常跑起来以后"才会遇到的坑。
+
+### 8.1 空闲休眠用 llama.cpp 原生能力，不自己做状态机
+
+`llama-server --help` 里有 `--sleep-idle-seconds`（b10775 起）。实测（32K/q8_0）：
+
+| 状态 | 显存占用 |
+|---|---|
+| 加载完成 | 4925 MiB |
+| 空闲到点后 | 2213 MiB（≈ 桌面基线） |
+| 收到一个 /completion 后 | 4925 MiB，请求成功 |
+
+所以不需要代理层：进程一直活着，客户端连接不变，模型自己退出显存再按需重载。
+`/props` 的 `is_sleeping` 就是界面上的「休眠」状态来源。
+
+### 8.2 ★ 关键发现：`/slots` 会重置空闲计时
+
+第一版按老逻辑每秒轮询 `/health` + `/slots`，结果 `--sleep-idle-seconds 60` 等了两分钟也不睡。
+用 5 组对照（每轮先唤醒，再只轮询一个端点 45 秒，阈值 30 秒）：
+
+| 只轮询 | 45 秒后 is_sleeping | 结论 |
+|---|---|---|
+| `/health` | true | 不重置、也不唤醒 |
+| `/slots` | **false** | 重置（且会把睡着的服务叫醒） |
+| `/props` | true | 安全 |
+| `/metrics` | true | 安全 |
+
+于是 `probe_loop` 改成：每 2.5 秒读一次 `/metrics`（`requests_processing`、token 累计）和
+`/props`（`is_sleeping`、`n_ctx`），**只有"有请求在处理"或刚活跃 30 秒内**才问 `/slots`。
+代价是上下文占用在纯空闲时不再刷新（此时也没有变化），容量用 `/props` 的 `n_ctx` 兜底。
+副作用：实际入睡时间比设定值晚约 30 秒，README 里写明了。
+
+### 8.3 启动时恢复上次状态：别在"第一眼"清标记
+
+`probe_loop` 原本看到 `stage == stopped` 就把 `last_running` 写 false。新进程启动的第一眼
+本来就是 stopped，于是"上次在跑"的记录在 1 秒内被抹掉，自动恢复永远不触发（已实测）。
+现在只在**真正的状态迁移**（running/starting → stopped）时清标记，并且在起探测线程之前先读
+一次 lifecycle。
+
+### 8.4 LoRA
+
+- 识别：文件名命中 `lora/lycoris/dora/adapter` 的 `.gguf/.bin`，以及 `models/loras/` 下的全部；
+  这类文件不再出现在模型库（否则会被"载入"然后失败）。
+- 参数：`--lora FNAME`；强度≠1 时用 `--lora-scaled FNAME:SCALE`。路径优先取**相对 llama.cpp
+  目录**的形式 —— Windows 绝对路径里的盘符冒号会和 `FNAME:SCALE` 的分隔符打架。
+- 每个模型独立保存 `launch.loras = [{path, scale, on}]`；文件不在了只跳过并写 app.log，
+  不删配置（换机器/拔硬盘不该清用户的设置）。
+
+### 8.5 客户端接入卡片
+
+`snapshot.client` 给出 `base_url / chat_url / model / api_key`，前端拼 curl 与 Python 片段；
+「测试连通」走后端 `GET /v1/models`，不依赖浏览器跨域。API Key 本地不校验，写 `123456`。
+
+### 8.6 诊断是只读的
+
+`core/diagnose.py`：先按日志正则收集硬证据（OOM / 参数被拒 / 模型读不到 / LoRA / 端口 / 权限 /
+CUDA 架构 / 架构不支持 / 模板 / DLL），再补配置侧风险（预算、256K、手填 -np、fit、MTP、
+mmproj、LoRA 缺失、端口被占），每条给具体数值和可执行改法。不启动、不写盘。
+
+### 8.7 顺手修掉的按钮 bug + 回退
+
+「保存修改」是 `class="btn ghost"` 再由 JS 动态加 `primary`，而 `.btn.ghost` 写在
+`.btn.primary` **后面**、特异性相同（都是 0,2,0）→ 浅色渐变底被 ghost 的深底覆盖，只剩
+primary 的深色字；hover 时 `.btn.primary:hover`（0,3,0）赢回来，所以"悬浮上去才正常"。
+改成 `.btn.ghost:not(.primary)`。回退按钮只回滚本地草稿（自动挑档 / 载入预设 / LoRA），
+不写盘，保存后栈清空。

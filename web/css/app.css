@@ -491,7 +491,10 @@ input::placeholder { color: #566072; }
   box-shadow: 0 6px 22px rgba(150,190,255,.28), inset 0 1px 0 rgba(255,255,255,.85); }
 .btn.primary:hover { background: linear-gradient(135deg, #e2f6ff, #ebe4ff); }
 .btn.primary svg.i { fill: currentColor; stroke: none; }
-.btn.ghost { background: rgba(255,255,255,.03); }
+/* ghost 必须让位给 primary：保存按钮是「ghost + 动态加 primary」，
+   原来 .btn.ghost 排在 .btn.primary 后面、同特异性，结果把浅色底覆盖掉，
+   只剩 .btn.primary 的深色字 —— 平时看着像坏掉，hover 才恢复（已实测）。 */
+.btn.ghost:not(.primary) { background: rgba(255,255,255,.03); }
 .btn.icon { padding: 9px 10px; }
 .btn.mini { padding: 6px 12px; font-size: 12px; border-radius: 10px; }
 .btn.danger { color: #ffd7dd; border-color: rgba(251,113,133,.35); background: rgba(251,113,133,.12); }
@@ -709,3 +712,60 @@ body.mini .hud-top { display: flex; align-items: center; gap: 7px; height: 24px;
   .aurora, .pulse, .ring { animation: none !important; }
   * { transition-duration: .01ms !important; }
 }
+
+/* ==================== v2.2 · 空闲与恢复 / LoRA / 客户端接入 / 诊断 ==================== */
+.warn-strip.restore { background: linear-gradient(100deg, rgba(61,220,151,.13), rgba(125,211,252,.07));
+  border-color: rgba(61,220,151,.28); color: #dcf8ec; }
+.warn-strip .btn { flex: none; }
+
+.life-rows { display: flex; flex-direction: column; gap: 0; }
+.life-row { display: flex; align-items: center; gap: 16px; padding: 12px 2px;
+  border-bottom: 1px dashed var(--line-soft); }
+.life-row:last-child { border-bottom: 0; }
+.life-txt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.life-txt b { font-size: 13px; font-weight: 600; }
+.life-txt span { font-size: 11.5px; color: var(--ink3); line-height: 1.55; }
+.life-min { display: flex; align-items: center; gap: 8px; flex: none; }
+.life-min-k { font-size: 11.5px; color: var(--ink3); }
+.life-min .step { width: 96px; }
+.life-last { flex: none; font-size: 11.5px; color: var(--ink3); font-family: var(--mono); }
+.tag.sleep { color: #d9e6ff; background: rgba(125,211,252,.10); border-color: rgba(125,211,252,.24); }
+
+.lora-list { display: flex; flex-direction: column; gap: 6px; }
+.lora-row { display: grid; grid-template-columns: auto 1fr 96px; align-items: center; gap: 14px;
+  padding: 9px 10px; border-radius: 12px; background: rgba(255,255,255,.028);
+  border: 1px solid var(--line-soft); }
+.lora-row .lr-name { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.lora-row .lr-name b { font-size: 12.5px; font-weight: 550; line-height: 1.35; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.lora-row .lr-name span { font-size: 10.5px; color: var(--ink3); font-family: var(--mono); }
+.lora-empty { font-size: 12px; color: var(--ink3); padding: 6px 2px; line-height: 1.7; }
+
+.client-card { margin-top: 12px; }
+.client-rows { display: grid; gap: 0; }
+.client-row { display: grid; grid-template-columns: 92px 1fr; align-items: center; gap: 12px;
+  padding: 7px 0; border-bottom: 1px dashed var(--line-soft); }
+.client-row:last-child { border-bottom: 0; }
+.client-row .ck { font-size: 12px; color: var(--ink3); }
+.client-row .cv { font-family: var(--mono); font-size: 12px; color: #dfe9f8;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.client-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+.client-hint { font-size: 11px; color: var(--ink3); }
+.client-ok { color: var(--run); } .client-bad { color: var(--err); }
+
+.modal-card.diag-card { width: min(720px, 92vw); }
+.diag-sum { font-size: 12.5px; color: var(--ink2); margin: 2px 0 10px; }
+.diag-list { display: flex; flex-direction: column; gap: 8px; max-height: 46vh; overflow: auto; }
+.diag-item { border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px 12px;
+  background: rgba(255,255,255,.028); }
+.diag-item b { font-size: 12.8px; }
+.diag-item .dt { font-size: 11.8px; color: var(--ink3); margin-top: 3px; line-height: 1.55; }
+.diag-item ul { margin: 7px 0 0; padding-left: 18px; }
+.diag-item li { font-size: 11.8px; color: #cfd8e6; line-height: 1.6; }
+.diag-item.error { border-color: rgba(251,113,133,.32); background: rgba(251,113,133,.06); }
+.diag-item.warn { border-color: rgba(251,191,36,.28); background: rgba(251,191,36,.05); }
+.diag-item.info { border-color: rgba(125,211,252,.24); background: rgba(125,211,252,.05); }
+.modal-card pre.diag-ev { flex: none; margin-top: 10px; padding: 10px 12px; max-height: 24vh;
+  border-radius: 10px; background: rgba(0,0,0,.3); font-size: 10.6px; line-height: 1.55;
+  color: #b8c4d6; }
+.modal-card pre.diag-ev[hidden] { display: none; }

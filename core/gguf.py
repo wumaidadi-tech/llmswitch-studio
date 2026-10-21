@@ -292,6 +292,41 @@ def _is_sidecar(low):
             or "draft" in low)
 
 
+# LoRA / adapter 适配器：不能当主模型列出来（会被误点「载入」然后加载失败）
+_LORA_RE = re.compile(r"(^|[-_.])(lora|lycoris|dora|adapter)s?([-_.]|$)", re.I)
+
+
+def is_lora_file(fn):
+    low = (fn or "").lower()
+    return low.endswith((".gguf", ".bin")) and bool(
+        _LORA_RE.search(low) or low.startswith(("lora-", "lora_")))
+
+
+def _lora_item(full):
+    try:
+        size = os.path.getsize(full)
+    except OSError:
+        size = 0
+    try:
+        rel = os.path.relpath(full, paths.LLAMA_DIR)
+    except Exception:
+        rel = full
+    return {"path": full, "name": rel, "size": size,
+            "dir": os.path.basename(os.path.dirname(full))}
+
+
+def scan_loras():
+    """models/ 下所有适配器（含 models/loras/ 子目录）。"""
+    out = []
+    if not paths.MODELS_DIR:
+        return out
+    for root, _dirs, files in os.walk(paths.MODELS_DIR):
+        for fn in sorted(files):
+            if is_lora_file(fn):
+                out.append(_lora_item(os.path.join(root, fn)))
+    return out
+
+
 def scan_models():
     """扫 models/ → 主模型条目列表（递归，按目录分组配对 mmproj / draft 头）。
 
@@ -309,13 +344,26 @@ def scan_models():
             except OSError:
                 continue
             found.append((full, fn, st.st_size, st.st_mtime))
-    mains, sides = [], []
+    mains, sides, loras = [], [], []
     for full, fn, size, mtime in found:
-        (sides if _is_sidecar(fn.lower()) else mains).append((full, fn, size, mtime))
+        if is_lora_file(fn):
+            loras.append((full, fn, size, mtime))
+        elif _is_sidecar(fn.lower()):
+            sides.append((full, fn, size, mtime))
+        else:
+            mains.append((full, fn, size, mtime))
 
     by_dir = {}
     for item in sides:
         by_dir.setdefault(os.path.dirname(item[0]), []).append(item)
+    lora_by_dir = {}
+    shared_loras = []
+    lora_home = os.path.join(paths.MODELS_DIR, "loras")
+    for item in loras:
+        d = os.path.dirname(item[0])
+        lora_by_dir.setdefault(d, []).append(item)
+        if os.path.normcase(d) == os.path.normcase(lora_home):
+            shared_loras.append(item)
 
     out = []
     for full, fn, size, mtime in sorted(mains, key=lambda x: x[0].lower()):
@@ -331,6 +379,14 @@ def scan_models():
                 draft = pfull
         meta = read_meta(full)
         rel = os.path.relpath(full, paths.LLAMA_DIR)
+        # 适配器：同目录的 + models/loras/ 里的公共适配器（去重）
+        lora_items, seen = [], set()
+        for item in lora_by_dir.get(d, []) + shared_loras:
+            low = item[0].lower()
+            if low in seen:
+                continue
+            seen.add(low)
+            lora_items.append(_lora_item(item[0]))
         out.append({
             "id": rel,
             "label": model_label(full),
@@ -341,6 +397,7 @@ def scan_models():
             "file": fn,
             "mmproj": mmproj,
             "mtp": draft,
+            "loras": lora_items,
             "spec": size_tag(fn),
             "quant": quant_of(fn, meta.get("file_type"), meta.get("quant_mix")),
             "size": size,

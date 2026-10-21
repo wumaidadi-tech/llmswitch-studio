@@ -41,6 +41,20 @@ Everything is local. No telemetry, no account, no cloud.
   the window stays out of the way.
 - **llama.cpp port & web UI** — change the llama-server port in **Runtime → llama-server API**; a running
   server restarts on the new port. The globe button opens llama.cpp's own web UI.
+- **Idle sleep** — passes `--sleep-idle-seconds` to `llama-server`. After the configured idle time the
+  model leaves VRAM (3–5 GB back on an 8 GB card) while the process stays alive; the next request
+  reloads it automatically, so clients need no changes. The toggle needs a restart to take effect.
+- **Restore last session** — if the server was running when you quit, the next launch starts the same
+  model again. Turn it off and the dashboard offers a one-click "start it again?" banner instead.
+- **LoRA / adapters** — detects `lora-*.gguf` / `*.bin` next to the model and under `models\loras\`,
+  with a per-adapter switch and scale (`--lora` / `--lora-scaled`). Adapters are no longer listed as models.
+- **Client card** — the dashboard shows base URL, model name and API key, copies curl / Python
+  snippets, and can hit `/v1/models` to verify the endpoint.
+- **Startup diagnostics** — turns the log tail plus the current config into a cause and concrete fixes
+  (OOM, rejected flag, port in use, broken LoRA, KV over budget…), reachable from the log page and the
+  failure strip, copyable in one click.
+- **Undo** — "auto-pick", "load preset" and LoRA edits push a local draft snapshot first; **Undo** steps
+  back without writing anything to disk.
 - **Update check** — menu → Check for updates compares your version with the latest GitHub release.
 - **Logs** — tail of `llama-server` output with error highlighting.
 - **Export** — copy the exact command line that was used, or export JSON / `.bat` / `.sh`.
@@ -178,6 +192,11 @@ Bound to `127.0.0.1` only; every `/api/*` call needs the token from `LLMSwitchDa
 | POST | `/api/llama-port` | `{"port":8080}` — change the llama-server port (restarts it if running) |
 | POST | `/api/open-url` | open a project page (only the repository URL is accepted) |
 | GET | `/api/update` | latest GitHub release compared with the running version |
+| GET | `/api/diagnose` | startup diagnosis: log evidence + config risks + fixes |
+| POST | `/api/lifecycle` | `{"idle_sleep":true,"idle_minutes":15,"restore_launch":true}` |
+| POST | `/api/wake` | start the server on demand (also wakes it from sleep) |
+| GET | `/wake?t=<token>` | same, for scripts (token lives in `runtime.json`) |
+| POST | `/api/client-test` | request `/v1/models` to verify the OpenAI endpoint |
 
 A model id is the path relative to the llama.cpp folder, e.g.
 `models\my-model\Qwen3-35B-A3B-Q4_K_M.gguf`.
@@ -186,6 +205,13 @@ A model id is the path relative to the llama.cpp folder, e.g.
 
 **"启动失败" with a reason.** The dashboard shows a short cause (out of memory / bad flag /
 model not found / port in use / permission / CUDA error); the **Logs** tab has the raw line.
+Hit **Diagnose** on the failure strip (or in the Logs tab) for structured causes, concrete fixes
+and a one-click copy.
+
+**Idle sleep never triggers?** The app only calls `/slots` while a request is in flight or within
+30 s of activity — polling `/slots` resets llama.cpp's idle timer (measured: polling only `/slots`
+keeps the server awake forever). So sleeping happens about 30 s later than configured, on purpose.
+`/health`, `/props` and `/metrics` do not reset the timer.
 When the process exits immediately, the reason is taken from the end of `llama-server.log`, because
 `Popen` itself succeeds in that case.
 

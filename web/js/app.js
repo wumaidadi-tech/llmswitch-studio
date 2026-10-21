@@ -25,6 +25,8 @@
   let activePreset = 'gen';
   let openSel = null;
   let hudPopOpen = false;
+  let undoStack = [];          // 启动参数的回退栈（只存本地草稿，不落盘）
+  let restoreDismissed = false;
 
   if (MINI) {
     document.body.classList.add('mini');
@@ -95,9 +97,9 @@
     if (MINI) { renderHud(); return; }     // 悬浮窗只有三行，别去算隐藏的图表
     renderTop();
     renderSide();
-    if (tab === 'dashboard') { renderStats(); renderTables(); drawMainChart(); }
+    if (tab === 'dashboard') { renderStats(); renderTables(); renderClient(); drawMainChart(); }
     if (tab === 'models') renderModelGrid();
-    if (tab === 'runtime') { renderRuntime(); renderBudget(); }
+    if (tab === 'runtime') { renderRuntime(); renderBudget(); renderLifecycle(); renderLoras(); }
     if (tab === 'sampling') renderSampling();
   }
 
@@ -105,11 +107,12 @@
     const st = S.status.stage;
     document.body.dataset.stage = st;
     if (MINI) document.title = 'LLMSwitch Mini · ' + stageText(st);
-    $('#stageText').textContent = stageText(st);
+    $('#stageText').textContent = S.live.sleeping ? '休眠中' : stageText(st);
     const sub = {
       stopped: (S.setup && S.setup.needs_llama_dir) ? '未配置 llama.cpp 目录' : '等待启动',
       starting: '加载权重与 KV · ' + (S.status.ctx || ''),
-      running: (S.status.pid ? 'PID ' + S.status.pid + ' · ' : '') + (S.live.health === 'ok' ? '接口就绪' : '预热中'),
+      running: S.live.sleeping ? '休眠中 · 下次请求自动唤醒'
+        : ((S.status.pid ? 'PID ' + S.status.pid + ' · ' : '') + (S.live.health === 'ok' ? '接口就绪' : '预热中')),
       stopping: '正在释放显存',
       error: S.status.error || '未知原因',
     }[st] || '';
@@ -125,19 +128,40 @@
     btn.classList.toggle('danger', running);
     $('#btnRestart').disabled = (st === 'stopped');
 
-    $('#pillStage').querySelector('span').textContent = stageText(st);
+    $('#pillStage').querySelector('span').textContent = S.live.sleeping ? '休眠' : stageText(st);
     $('#tbTps').textContent = S.live.tps ? S.live.tps.toFixed(1) : '—';
 
     const needDir = !!(S.setup && S.setup.needs_llama_dir);
     $('#setupStrip').hidden = !needDir;
     const need = S.plan.need_mib, free = S.plan.vram_free;
+    const isErr = st === 'error';
     const over = !needDir && need > free && S.plan.vram_total;
-    $('#warnStrip').hidden = !over;
+    $('#warnStrip').hidden = !(over || isErr);
+    $('#warnDiag').hidden = !(over || isErr);
     if (over) {
       $('#warnText').textContent =
         '按当前配置预计需要 ' + need + ' MiB，可用仅 ' + free + ' MiB，可能 OOM。'
         + '可以把上下文降到 ' + suggestCtx(free) + 'K，或改用 q8_0 KV，或先关掉占用显存的程序。';
+    } else if (isErr) {
+      $('#warnText').textContent = '启动失败：' + (S.status.error || '未知原因');
     }
+    renderRestore();
+  }
+
+  /* 上次在跑、这次没自动恢复 → 顶部给一条「要不要启动」 */
+  function renderRestore() {
+    const el = $('#restoreStrip');
+    if (!el) return;
+    const lc = S.lifecycle || {};
+    const st = S.status.stage;
+    const recent = lc.last_at && (Date.now() / 1000 - lc.last_at) < 7 * 86400;
+    const show = !restoreDismissed && !lc.restore_launch && lc.last_running
+      && recent && (st === 'stopped' || st === 'error');
+    el.hidden = !show;
+    if (!show) return;
+    const m = (S.models || []).find((x) => x.id === lc.last_model) || S.current;
+    $('#restoreText').textContent = '上次退出时服务在运行'
+      + (m ? '（' + midName(m.label, 24) + '）' : '') + '，要现在启动吗？';
   }
 
   function renderTop() {
@@ -154,6 +178,7 @@
       }
       if (c.has_mmproj) tags.push('<span class="tag" title="' + esc(c.mmproj_name || '') + '">视觉</span>');
       if (c.has_nextn) tags.push('<span class="tag run">MTP</span>');
+      if (S.live.sleeping) tags.push('<span class="tag sleep">休眠</span>');
 
       if (c.n_layers) tags.push('<span class="tag">' + c.n_layers + ' L</span>');
       if (c.n_expert) tags.push('<span class="tag">' + c.n_expert + ' E</span>');
@@ -211,6 +236,7 @@
     const lc = (S.cfg && S.cfg.launch) || {};
     const tags = [];
     if (S.status.kv) tags.push(S.status.kv);
+    if (S.live.sleeping) tags.push('休眠');
     if (lc.spec === 'draft-mtp') tags.push('MTP');
     if (lc.mmproj && c && c.has_mmproj) tags.push('视觉');
     $('#hudTags').innerHTML = tags.slice(0, 3).map((t) => '<span>' + esc(t) + '</span>').join('');
@@ -421,6 +447,7 @@
     const chosen = S.current ? S.current.id : '';
     if (builtFor === chosen && $('#fieldsCtx').childElementCount) return;
     builtFor = chosen;
+    undoStack = [];                      // 换模型后旧的启动参数不再适用
     draft.launch = Object.assign({}, S.cfg.launch);
     draft.sampling = Object.assign({}, S.cfg.sampling);
 
@@ -729,6 +756,223 @@
     }
   }
 
+  /* ---------------- 客户端接入 ---------------- */
+  function clientSnippets() {
+    const c = S.client || {};
+    const base = c.base_url || 'http://127.0.0.1:8080/v1';
+    const model = c.model || 'local-model';
+    const key = c.api_key || '123456';
+    const payload = JSON.stringify({ model: model, messages: [{ role: 'user', content: '你好' }] });
+    const curl = 'curl ' + base + '/chat/completions -H "Content-Type: application/json" -d \'' + payload + '\'';
+    const py = [
+      'from openai import OpenAI',
+      '',
+      'client = OpenAI(base_url="' + base + '", api_key="' + key + '")',
+      'r = client.chat.completions.create(',
+      '    model="' + model + '",',
+      '    messages=[{"role": "user", "content": "你好"}],',
+      ')',
+      'print(r.choices[0].message.content)',
+    ].join('\n');
+    return { base: base, model: model, key: key, curl: curl, py: py };
+  }
+
+  function renderClient() {
+    const box = $('#clientRows');
+    if (!box) return;
+    const c = clientSnippets();
+    const lc = S.lifecycle || {};
+    const rows = [
+      ['Base URL', c.base],
+      ['模型名', c.model],
+      ['API Key', c.key],
+    ];
+    if (lc.idle_sleep) rows.push(['唤醒地址', (S.client && S.client.wake_url) || '—']);
+    const html = rows.map(([k, v]) =>
+      '<div class="client-row"><span class="ck">' + k + '</span>'
+      + '<span class="cv" title="' + esc(v) + '">' + esc(v) + '</span></div>').join('');
+    if (box.dataset.sig !== html) { box.innerHTML = html; box.dataset.sig = html; }
+    const hint = $('#clientHint');
+    if (hint && !hint.dataset.locked) {
+      hint.textContent = 'API Key 随便填（本地不校验）· 服务没启动时连不上';
+      hint.className = 'client-hint';
+    }
+  }
+
+  async function testClient() {
+    const hint = $('#clientHint');
+    if (DEMO) {
+      hint.textContent = '连通 · 模型：' + ((S.client && S.client.model) || '—');
+      hint.className = 'client-hint client-ok';
+      hint.dataset.locked = '1';
+      return;
+    }
+    hint.dataset.locked = '1';
+    hint.textContent = '正在请求 /v1/models…';
+    hint.className = 'client-hint';
+    try {
+      const d = await api('/api/client-test', { json: {} });
+      if (d.ok) {
+        hint.textContent = '连通 · ' + (d.models.length ? d.models.join(' / ') : '（服务没报模型名）');
+        hint.className = 'client-hint client-ok';
+      } else {
+        hint.textContent = d.error || '连不上';
+        hint.className = 'client-hint client-bad';
+      }
+    } catch (e) {
+      hint.textContent = '测试失败：' + e.message;
+      hint.className = 'client-hint client-bad';
+    }
+  }
+
+  /* ---------------- 空闲休眠与恢复 ---------------- */
+  function syncSwText(cb) {
+    const t = cb && cb.closest('.switch') && cb.closest('.switch').querySelector('.sw-txt');
+    if (t) t.textContent = cb.checked ? '开启' : '关闭';
+  }
+
+  function renderLifecycle() {
+    if (!$('#lcIdle')) return;
+    const lc = S.lifecycle || {};
+    const run = S.status.stage === 'running';
+    const idle = $('#lcIdle');
+    if (document.activeElement !== idle) { idle.checked = !!lc.idle_sleep; syncSwText(idle); }
+    const rest = $('#lcRestore');
+    if (document.activeElement !== rest) { rest.checked = !!lc.restore_launch; syncSwText(rest); }
+    const mins = $('#lcMinutes');
+    if (mins && document.activeElement !== mins) mins.value = lc.idle_minutes || 15;
+
+    const tag = $('#idleState');
+    if (S.live.sleeping) { tag.textContent = '休眠中'; tag.className = 'tag sleep'; }
+    else if (!lc.idle_sleep) { tag.textContent = '未启用'; tag.className = 'tag'; }
+    else if (run) {
+      tag.textContent = '空闲 ' + Math.round((S.status.idle_secs || 0) / 60) + ' 分 / 满 '
+        + (lc.idle_minutes || 15) + ' 分休眠';
+      tag.className = 'tag run';
+    } else { tag.textContent = '已启用'; tag.className = 'tag'; }
+
+    const last = $('#lcLast');
+    if (last) last.textContent = lc.last_running ? '上次：运行中' : '上次：已停止';
+  }
+
+  async function setLifecycle(patch) {
+    if (DEMO) {
+      S.lifecycle = Object.assign({}, S.lifecycle, patch);
+      renderLifecycle();
+      renderClient();
+      return;
+    }
+    try {
+      const d = await api('/api/lifecycle', { json: patch });
+      S.lifecycle = d.lifecycle;
+      renderLifecycle();
+      renderClient();
+      toast(d.needs_restart ? '已保存，重启服务后生效' : '已保存', 'ok');
+    } catch (e) {
+      toast('保存失败：' + e.message, 'err');
+      renderLifecycle();
+    }
+  }
+
+  /* ---------------- LoRA ---------------- */
+  function baseName(p) {
+    return String(p || '').split(/[\\/]/).pop();
+  }
+
+  function renderLoras() {
+    const box = $('#loraList');
+    if (!box || !S) return;
+    const detected = (S.current && S.current.loras) || [];
+    const conf = draft.launch.loras || [];
+    const map = {};
+    detected.forEach((d) => { map[d.path] = { path: d.path, name: d.name, size: d.size }; });
+    conf.forEach((c) => {
+      if (!map[c.path]) map[c.path] = { path: c.path, name: c.path, size: 0, missing: true };
+    });
+    const keys = Object.keys(map);
+    if (!keys.length) {
+      const empty = '<div class="lora-empty">没有找到适配器。把 lora-*.gguf 放到模型同目录或 <code>models\\loras\\</code>，再点右上角「重新扫描」。</div>';
+      if (box.dataset.sig !== empty) { box.innerHTML = empty; box.dataset.sig = empty; }
+      return;
+    }
+    const html = keys.map((k) => {
+      const info = map[k];
+      const c = conf.find((x) => x.path === k) || { on: false, scale: '1' };
+      return '<div class="lora-row" data-lora="' + esc(k) + '">'
+        + '<label class="switch"><input type="checkbox" data-lora-on="1"' + (c.on ? ' checked' : '')
+        + (info.missing ? ' disabled' : '') + '><span></span><i class="sw-txt">' + (c.on ? '开启' : '关闭') + '</i></label>'
+        + '<div class="lr-name"><b title="' + esc(info.name) + '">' + esc(baseName(info.name)) + '</b>'
+        + '<span>' + (info.missing ? '文件不在了' : (info.size ? fmtGB(info.size) : '—')) + '</span></div>'
+        + '<div class="step"><button type="button" data-lora-step="-1" aria-label="减少">−</button>'
+        + '<input type="number" data-lora-scale="1" min="0" max="4" step="0.05" value="' + esc(c.scale || '1') + '">'
+        + '<button type="button" data-lora-step="1" aria-label="增加">+</button></div>'
+        + '</div>';
+    }).join('');
+    if (box.contains(document.activeElement)) return;      // 正在输入就不要重建
+    if (box.dataset.sig !== html) { box.innerHTML = html; box.dataset.sig = html; }
+  }
+
+  function setLora(path, patch) {
+    pushUndo('LoRA');
+    const arr = (draft.launch.loras || []).slice();
+    let i = arr.findIndex((x) => x.path === path);
+    if (i < 0) { arr.push({ path: path, scale: '1', on: true }); i = arr.length - 1; }
+    arr[i] = Object.assign({}, arr[i], patch);
+    draft.launch.loras = arr;
+    markDirty();
+    renderLoras();
+  }
+
+  /* ---------------- 诊断 ---------------- */
+  function diagText(d) {
+    const lines = ['【诊断】' + (d.summary || '')];
+    (d.items || []).forEach((it, i) => {
+      lines.push('');
+      lines.push((i + 1) + '. [' + (it.level || 'info') + '] ' + it.title);
+      if (it.detail) lines.push('   ' + it.detail);
+      (it.fix || []).forEach((f) => lines.push('   - ' + f));
+    });
+    if ((d.evidence || []).length) {
+      lines.push('');
+      lines.push('日志证据：');
+      d.evidence.forEach((e) => lines.push('  ' + e));
+    }
+    return lines.join('\n');
+  }
+
+  function showDiag(d) {
+    $('#diagSum').textContent = d.summary || '—';
+    const items = d.items || [];
+    $('#diagList').innerHTML = items.length ? items.map((it) =>
+      '<div class="diag-item ' + esc(it.level || 'info') + '"><b>' + esc(it.title) + '</b>'
+      + (it.detail ? '<div class="dt">' + esc(it.detail) + '</div>' : '')
+      + ((it.fix || []).length ? '<ul>' + it.fix.map((f) => '<li>' + esc(f) + '</li>').join('') + '</ul>' : '')
+      + '</div>').join('')
+      : '<div class="lora-empty">没有发现问题：日志里没有 OOM、参数被拒、端口占用的痕迹。</div>';
+    const ev = d.evidence || [];
+    const box = $('#diagEv');
+    box.hidden = !ev.length;
+    box.textContent = ev.join('\n');
+    const m = $('#diagModal');
+    m.hidden = false;
+    m.dataset.text = diagText(d);
+  }
+
+  async function runDiag() {
+    if (DEMO) {
+      showDiag({ summary: '演示数据：发现 1 个风险。', evidence: ['demo: cuda out of memory'],
+        items: [{ level: 'warn', title: '预计显存不够（配置层面）',
+          detail: '按当前配置估算需要 6920 MiB，可用只有 5031 MiB。',
+          fix: ['把上下文降到 64K', 'KV 改 q8_0', '关掉其它占显存的程序'] }] });
+      return;
+    }
+    try {
+      showDiag(await api('/api/diagnose'));
+    } catch (e) {
+      toast('诊断失败：' + e.message, 'err');
+    }
+  }
+
   /* ---------------- 预设 ---------------- */
   function renderPresets() {
     const box = $('#presetChips');
@@ -769,6 +1013,7 @@
   function applyPreset(name) {
     const p = (S.presets || {})[name];
     if (!p) return;
+    pushUndo('载入预设「' + name + '」');
     draft.sampling = Object.assign({}, p.sampling || {});
     draft.launch = Object.assign({}, p.launch || {});
     activePreset = name;
@@ -798,6 +1043,33 @@
   }
 
   /* ---------------- 保存 / 动作 ---------------- */
+  function pushUndo(label) {
+    if (!S) return;
+    undoStack.push({ label: label, launch: JSON.parse(JSON.stringify(draft.launch)) });
+    if (undoStack.length > 12) undoStack.shift();
+    refreshUndo();
+  }
+
+  function refreshUndo() {
+    const b = $('#btnUndo');
+    if (!b) return;
+    b.disabled = !undoStack.length;
+    b.title = undoStack.length
+      ? '撤销「' + undoStack[undoStack.length - 1].label + '」之前的状态（还没保存）'
+      : '还没有可回退的改动';
+  }
+
+  function undoLaunch() {
+    const it = undoStack.pop();
+    if (!it) return;
+    draft.launch = it.launch;
+    refreshValues('launch');
+    renderBudget();
+    renderLoras();
+    markDirty();
+    toast('已回退到「' + it.label + '」之前（还没保存）', 'ok');
+  }
+
   function markDirty() {
     if (!S) return;
     const cl = JSON.stringify(draft.launch) !== JSON.stringify(S.cfg.launch);
@@ -808,6 +1080,7 @@
     const bs = $('#btnSaveSampling');
     bs.textContent = cs ? '保存修改' : '已保存';
     bs.classList.toggle('primary', cs);
+    refreshUndo();
   }
 
   async function save(ns, restart) {
@@ -818,6 +1091,7 @@
       const d = await api('/api/config', { json: { id: S.current.id, cfg: cfg } });
       S.cfg = d.cfg;
       draft[ns] = Object.assign({}, d.cfg[ns]);
+      undoStack = [];                    // 已落盘，回退栈作废
       markDirty();
       const running = ['running', 'starting'].includes(S.status.stage);
       if (running) {
@@ -1090,13 +1364,110 @@
     $('#btnSaveSampling').addEventListener('click', () => save('sampling', false));
 
     $('#btnAutoCtx').addEventListener('click', () => {
+      pushUndo('自动挑档');
       const c = suggestCtx(S.plan.vram_free);
       draft.launch.ctx = String(c);
       draft.launch.kv = 'auto';
       refreshValues('launch');
       renderBudget();
       markDirty();
-      toast('按可用显存选了 ' + c + 'K / 自动 KV', 'ok');
+      toast('按可用显存选了 ' + c + 'K / 自动 KV；不满意可点「回退」', 'ok');
+    });
+    $('#btnUndo').addEventListener('click', undoLaunch);
+
+    /* 空闲休眠 / 恢复 */
+    const lcIdle = $('#lcIdle');
+    lcIdle.addEventListener('change', () => {
+      syncSwText(lcIdle);
+      setLifecycle({ idle_sleep: lcIdle.checked, idle_minutes: parseInt($('#lcMinutes').value, 10) || 15 });
+    });
+    const lcMinutes = $('#lcMinutes');
+    const sendMinutes = () => {
+      const v = clamp(parseInt(lcMinutes.value, 10) || 15, 1, 720);
+      lcMinutes.value = v;
+      setLifecycle({ idle_minutes: v });
+    };
+    lcMinutes.addEventListener('change', sendMinutes);
+    lcMinutes.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); lcMinutes.blur(); } });
+    const bumpMin = (d) => {
+      const v = clamp((parseInt(lcMinutes.value, 10) || 15) + d, 1, 720);
+      lcMinutes.value = v;
+      setLifecycle({ idle_minutes: v });
+    };
+    $('#lcMinus').addEventListener('click', () => bumpMin(-1));
+    $('#lcPlus').addEventListener('click', () => bumpMin(1));
+    const lcRestore = $('#lcRestore');
+    lcRestore.addEventListener('change', () => {
+      syncSwText(lcRestore);
+      setLifecycle({ restore_launch: lcRestore.checked });
+    });
+
+    /* LoRA 列表：开关 / 强度 */
+    $('#loraList').addEventListener('change', (ev) => {
+      const row = ev.target.closest('[data-lora]');
+      if (!row) return;
+      const path = row.dataset.lora;
+      if (ev.target.matches('[data-lora-on]')) {
+        syncSwText(ev.target);
+        setLora(path, { on: ev.target.checked });
+      } else if (ev.target.matches('[data-lora-scale]')) {
+        const v = clamp(parseFloat(ev.target.value) || 0, 0, 4).toFixed(2).replace(/\.?0+$/, '');
+        ev.target.value = v || '0';
+        setLora(path, { scale: v || '0' });
+      }
+    });
+    $('#loraList').addEventListener('click', (ev) => {
+      const b = ev.target.closest('[data-lora-step]');
+      if (!b) return;
+      const row = b.closest('[data-lora]');
+      const inp = row.querySelector('[data-lora-scale]');
+      const v = clamp((parseFloat(inp.value) || 0) + 0.05 * parseInt(b.dataset.loraStep, 10), 0, 4);
+      inp.value = v.toFixed(2).replace(/\.?0+$/, '') || '0';
+      setLora(row.dataset.lora, { scale: inp.value });
+    });
+    $('#btnLoraScan').addEventListener('click', async () => {
+      if (DEMO) { toast('演示模式', 'ok'); return; }
+      try {
+        await api('/api/models?rescan=1');
+        tick();
+        toast('已重新扫描适配器', 'ok');
+      } catch (e) { toast('扫描失败：' + e.message, 'err'); }
+    });
+
+    /* 客户端接入 */
+    const cc = $('#clientRows');
+    $$('#content [data-copy]').forEach((b) => {
+      b.addEventListener('click', () => {
+        const k = b.dataset.copy;
+        const s = clientSnippets();
+        let text = s.base;
+        if (k === 'model') text = s.model;
+        if (k === 'curl') text = s.curl;
+        if (k === 'py') text = s.py;
+        copy(text);
+        toast('已复制', 'ok');
+      });
+    });
+    if (cc) cc.addEventListener('click', () => {});
+    $('#btnClientTest').addEventListener('click', testClient);
+
+    /* 诊断 / 恢复 */
+    $('#btnDiag').addEventListener('click', runDiag);
+    $('#warnDiag').addEventListener('click', runDiag);
+    $('#diagCopy').addEventListener('click', () => {
+      copy($('#diagModal').dataset.text || '');
+      toast('已复制诊断结果', 'ok');
+    });
+    $('#diagRestart').addEventListener('click', () => { $('#diagModal').hidden = true; save('launch', true); });
+    $('#restoreStart').addEventListener('click', () => {
+      const lc = S.lifecycle || {};
+      serverAction('start', lc.last_model || (S.current && S.current.id));
+      restoreDismissed = true;
+      $('#restoreStrip').hidden = true;
+    });
+    $('#restoreDismiss').addEventListener('click', () => {
+      restoreDismissed = true;
+      $('#restoreStrip').hidden = true;
     });
 
     $('#modelGrid').addEventListener('change', async (ev) => {
@@ -1581,17 +1952,19 @@
         quant_mix: [{ type: 'Q6_K', pct: 39.1 }, { type: 'IQ4_XS', pct: 36.4 }, { type: 'Q5_K', pct: 23.5 }],
         mmproj_name: 'mmproj-Qwen3-35B-A3B-APEX-F16.gguf', mmproj_size: 899283072,
         size: 23514746272, dir: 'big', has_mmproj: true, has_nextn: true, arch: 'qwen3moe',
-        n_layers: 41, n_expert: 256, n_ctx_train: 262144, selected: true, running: true },
+        n_layers: 41, n_expert: 256, n_ctx_train: 262144, selected: true, running: true,
+        loras: [{ name: 'models\\loras\\style-lora-q4.gguf', size: 104857600, path: 'D:\\llama.cpp\\models\\loras\\style-lora-q4.gguf' }] },
       { id: 'models\\ud-q4km\\Qwen3-35B-A3B-UD-Q4_K_M.gguf',
         label: 'Qwen3-35B-A3B-UD-Q4_K_M', spec: '35B-A3B', quant: '混合',
         quant_mix: [{ type: 'Q4_K', pct: 54.6 }, { type: 'Q5_K', pct: 30.9 }, { type: 'Q8_0', pct: 9.2 }, { type: 'Q6_K', pct: 4.8 }],
         mmproj_name: 'mmproj-F16.gguf', mmproj_size: 899283584,
         size: 22663387424, dir: 'ud-q4km', has_mmproj: true, has_nextn: true, arch: 'qwen3moe',
-        n_layers: 41, n_expert: 256, n_ctx_train: 262144, selected: false, running: false },
+        n_layers: 41, n_expert: 256, n_ctx_train: 262144, selected: false, running: false, loras: [] },
     ];
     const launch = { ctx: '128', kv: 'auto', ngl: '999', ot: 'exps=CPU', fa: 'on', fit: 'off', fitt: '1024',
       threads: '16', batch: '2048', ubatch: '512', cache_ram: '8192', keep: '4096', kv_offload: true,
-      moe_cache: '0', spec: 'draft-mtp', spec_n_max: '2', mmproj: true, metrics: true, alias: 'local-model', np: 'auto' };
+      moe_cache: '0', spec: 'draft-mtp', spec_n_max: '2', mmproj: true, metrics: true, alias: 'local-model', np: 'auto',
+      loras: [{ path: 'D:\\llama.cpp\\models\\loras\\style-lora-q4.gguf', scale: '0.8', on: true }] };
     const sampling = { temp: '0.7', top_p: '0.95', top_k: '20', min_p: '0.05', presence: '0.5', repeat: '1.08',
       repeat_n: '256', dry_mult: '0.8', dry_base: '1.75', dry_len: '2', dry_n: '512', xtc_prob: '0',
       xtc_thresh: '0.1', typical_p: '1', budget: '512', seed: '-1', sampler_order: 'rec', sty: 'gen' };
@@ -1599,6 +1972,7 @@
       ok: true, version: '2.1.3', ts: now,
       status: { stage: 'running', pid: 21488, model: models[0].id, ctx: '128K', kv: 'q8_0',
         started_at: now - 640, ready_at: now - 615, stage_at: now - 640, error: '', warmup_ms: 23800, cmd: [],
+        idle_secs: 42, auto_unloaded: false,
         cmdline: 'llama-server.exe -m models\\big\\Qwen3-35B-A3B-Q6_K.gguf --mmproj ... -c 131072 -ngl 999 -ot exps=CPU -fa on -fit off -t 16 -b 2048 -ub 512 --cache-type-k q8_0 --cache-type-v q8_0 --cache-ram 8192 --spec-type draft-mtp --spec-draft-n-max 2 --reasoning on --reasoning-budget 512 --temp 0.7 --top-p 0.95 --top-k 20 --min-p 0.05 --presence-penalty 0.5 --repeat-penalty 1.08 --repeat-last-n 256 --dry-multiplier 0.8 --dry-base 1.75 --dry-allowed-length 2 --dry-penalty-last-n 512 --jinja --host 127.0.0.1 --port 8080 --metrics' },
       current: models[0], models: models,
       cfg: { sampling: sampling, launch: launch, kv_effective: 'q8_0', id: models[0].id },
@@ -1611,6 +1985,11 @@
       paths: { llama_dir: 'D:\\llama.cpp', models_dir: 'D:\\llama.cpp\\models', log: 'state\\llama-server.log',
         port: 8770, llama_port: 8080, exe: 'D:\\llama.cpp\\llama-server.exe', frozen: false },
       presets: { '长文 128K': { sampling: sampling, launch: launch } },
+      client: { base_url: 'http://127.0.0.1:8080/v1', chat_url: 'http://127.0.0.1:8080/v1/chat/completions',
+        root: 'http://127.0.0.1:8080/', model: 'qwen-coder', api_key: '123456',
+        wake_url: 'http://127.0.0.1:8770/wake?t=…' },
+      lifecycle: { idle_sleep: true, idle_minutes: 15, restore_launch: true,
+        last_running: true, last_model: models[0].id, last_at: now - 3600 },
       setup: { needs_llama_dir: false },
       ui: {},
     };

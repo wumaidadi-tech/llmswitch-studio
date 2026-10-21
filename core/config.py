@@ -158,6 +158,15 @@ STATE = {
     "llama_port": 0,       # llama-server 端口（0 = 用默认值）
     "ui": {"tab": "dashboard", "mini": False, "topmost": False},
     "window": {"x": None, "y": None, "w": 1280, "h": 880},
+    # 生命周期：空闲休眠 / 启动时恢复上次状态。全局一份，不跟模型走。
+    "lifecycle": {
+        "idle_sleep": False,      # 空闲后让 llama-server 自己睡（llama.cpp 原生）
+        "idle_minutes": 15,       # 空闲多少分钟后睡
+        "restore_launch": True,   # 下次启动本程序时恢复上次的运行状态
+        "last_running": False,    # 上次退出时服务是否在运行
+        "last_model": "",
+        "last_at": 0,
+    },
 }
 MODELS = []                # 由 api/app 层填充（gguf.scan_models() 的结果）
 
@@ -205,9 +214,36 @@ def norm_sampling(raw, base=None):
     return m
 
 
+def _norm_loras(raw):
+    """LoRA 适配器列表：只保留「路径 + 强度 + 开关」，路径不存在也保留
+    （文件可能在别的机器上，启动时再校验，避免一次扫描失败就把用户配置清掉）。"""
+    out = []
+    if not isinstance(raw, list):
+        return out
+    seen = set()
+    for it in raw[:16]:
+        if not isinstance(it, dict):
+            continue
+        p = str(it.get("path") or "").strip()
+        if not p or len(p) > 512 or p in seen:
+            continue
+        seen.add(p)
+        try:
+            sc = float(it.get("scale", 1.0))
+        except Exception:
+            sc = 1.0
+        sc = max(0.0, min(4.0, sc))
+        out.append({"path": p, "scale": ("%.2f" % sc).rstrip("0").rstrip(".") or "0",
+                    "on": bool(it.get("on", True))})
+    return out
+
+
 def norm_launch(raw, base=None):
     m = dict(base or {k: LAUNCH_BY_KEY[k]["default"] for k in LAUNCH_KEYS})
     raw = raw if isinstance(raw, dict) else {}
+    # loras 不是标量 schema 项，单独处理（前端有一块专用列表 UI）
+    loras = raw.get("loras", (base or {}).get("loras"))
+    m["loras"] = _norm_loras(loras)
     for spec in LAUNCH_SPECS:
         k = spec["key"]
         if k not in raw:
@@ -336,6 +372,46 @@ def preset_cfg(name):
     return norm_cfg(p) if isinstance(p, dict) else None
 
 
+# ==================== 生命周期 ====================
+def lifecycle():
+    with _lock:
+        return json.loads(json.dumps(STATE.get("lifecycle") or {}, ensure_ascii=False))
+
+
+def set_lifecycle(**kw):
+    with _lock:
+        lc = STATE.setdefault("lifecycle", {})
+        for k, v in kw.items():
+            if k in ("idle_sleep", "restore_launch", "last_running"):
+                lc[k] = bool(v)
+            elif k == "idle_minutes":
+                try:
+                    lc[k] = int(max(1, min(720, int(float(v)))))
+                except Exception:
+                    pass
+            elif k in ("last_model", "last_at"):
+                lc[k] = v
+    save()
+    return lifecycle()
+
+
+def set_last_running(running, model_id=None):
+    """记录"上次退出时服务在不在跑"。probe 每秒都会调，只在变化时落盘。"""
+    with _lock:
+        lc = STATE.setdefault("lifecycle", {})
+        changed = bool(lc.get("last_running")) != bool(running)
+        if model_id and lc.get("last_model") != model_id:
+            changed = True
+        if not changed:
+            return False
+        lc["last_running"] = bool(running)
+        if model_id:
+            lc["last_model"] = model_id
+        lc["last_at"] = int(time.time())
+    save()
+    return True
+
+
 # ==================== 持久化 ====================
 def _coerce_state(d):
     with _lock:
@@ -374,6 +450,20 @@ def _coerce_state(d):
             for k in ("mini", "topmost"):
                 if k in ui:
                     STATE["ui"][k] = bool(ui[k])
+        lc = d.get("lifecycle")
+        if isinstance(lc, dict):
+            for k in ("idle_sleep", "restore_launch", "last_running"):
+                if k in lc:
+                    STATE["lifecycle"][k] = bool(lc[k])
+            for k in ("idle_minutes",):
+                if isinstance(lc.get(k), (int, float)):
+                    STATE["lifecycle"][k] = int(max(1, min(720, lc[k])))
+            for k in ("last_model",):
+                if isinstance(lc.get(k), str):
+                    STATE["lifecycle"][k] = lc[k]
+            for k in ("last_at",):
+                if isinstance(lc.get(k), (int, float)):
+                    STATE["lifecycle"][k] = int(lc[k])
         win = d.get("window")
         if isinstance(win, dict):
             for k in ("w", "h"):
