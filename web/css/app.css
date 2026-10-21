@@ -843,13 +843,13 @@ pre.diag-ev[hidden] { display: none; }
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .28), 0 4px 12px rgba(0, 0, 0, .35); }
 .wz-ico svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7;
   stroke-linecap: round; stroke-linejoin: round; }
-.wz-ico.workbuddy { background: transparent; box-shadow: none; }
+.wz-ico.workbuddy { background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .09); }
 .wz-ico.claude { background: linear-gradient(145deg, #e08a6a, #d97757); }
 .wz-ico.codex { background: linear-gradient(145deg, #3f4652, #111827); }
 .wz-ico.env { background: linear-gradient(145deg, #34d399, #047857); }
 .wz-ico.json { background: linear-gradient(145deg, #a78bfa, #6d28d9); }
-.wz-ico img { width: 20px; height: 20px; filter: brightness(0) invert(1); opacity: .97; }
-.wz-ico.workbuddy img { width: 26px; height: 26px; filter: none; opacity: 1; border-radius: 8px; }
+.wz-ico img { width: 20px; height: 20px; filter: brightness(0) invert(1); opacity: .97; display: block; }
+.wz-ico.workbuddy img { width: 20px; height: 20px; filter: none; opacity: 1; border-radius: 6px; }
 .wz-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .wz-name { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
 .wz-gain { font-size: 11.5px; color: var(--ink3); line-height: 1.5; }
